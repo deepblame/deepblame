@@ -1,0 +1,13 @@
+{
+  "name": "@deepblame/core",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Git plumbing, ledger and repository setup. Bundled into the CLI, never published on its own.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@deepblame/protocol": "workspace:*"
+  }
+}

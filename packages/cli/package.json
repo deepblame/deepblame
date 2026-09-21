@@ -1,0 +1,36 @@
+{
+  "name": "deepblame",
+  "version": "0.1.0",
+  "description": "Know which AI agent wrote every line of your code, why it wrote it, and undo just that agent's work.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "bin": {
+    "deepblame": "dist/deepblame.mjs"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "git",
+    "blame",
+    "provenance",
+    "ai-agents",
+    "coding-agents",
+    "claude-code",
+    "opencode",
+    "codex",
+    "cursor"
+  ],
+  "scripts": {
+    "build": "node scripts/build.mjs"
+  },
+  "devDependencies": {
+    "@deepblame/core": "workspace:*",
+    "@deepblame/protocol": "workspace:*"
+  }
+}

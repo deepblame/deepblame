@@ -1,0 +1,13 @@
+{
+  "name": "@deepblame/protocol",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Event schema and shared constants. Bundled into the CLI, never published on its own.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "zod": "^4.6.5"
+  }
+}
