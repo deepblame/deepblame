@@ -10,7 +10,8 @@
     "build": "pnpm --filter deepblame build",
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run",
-    "check": "pnpm typecheck && pnpm test && pnpm build"
+    "check": "pnpm typecheck && pnpm test && pnpm build",
+    "smoke": "node packages/cli/scripts/smoke.mjs"
   },
   "devDependencies": {
     "@types/node": "^26.6.2",

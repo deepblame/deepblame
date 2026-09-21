@@ -10,7 +10,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
         node: [22, 24]
     runs-on: ${{ matrix.os }}
     steps:
@@ -24,11 +24,5 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm build
-      - name: Smoke test the packed CLI in a fresh repository
-        shell: bash
-        run: |
-          (cd packages/cli && npm pack --pack-destination "$RUNNER_TEMP")
-          TGZ=$(ls "$RUNNER_TEMP"/deepblame-*.tgz)
-          mkdir "$RUNNER_TEMP/smoke" && cd "$RUNNER_TEMP/smoke" && git init -q
-          npm exec --yes --package="$TGZ" -- deepblame init
-          npm exec --yes --package="$TGZ" -- deepblame status
+      # Packs the CLI, runs it with `npm exec` in a fresh repository, checks nothing was touched.
+      - run: pnpm smoke

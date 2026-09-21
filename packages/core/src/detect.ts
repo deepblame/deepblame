@@ -1,5 +1,5 @@
 import { accessSync, constants, existsSync, statSync } from 'node:fs';
-import { delimiter, join } from 'node:path';
+import { join } from 'node:path';
 import type { HarnessId } from '@deepblame/protocol';
 
 export interface HarnessDetection {
@@ -25,9 +25,24 @@ const SIGNATURES: readonly HarnessSignature[] = [
   { id: 'cursor', label: 'Cursor', markers: ['.cursor', '.cursorrules'], binaries: ['cursor'] },
 ];
 
-export function detectHarnesses(root: string, env: NodeJS.ProcessEnv = process.env): HarnessDetection[] {
-  const pathDirs = (env.PATH ?? '').split(delimiter).filter(Boolean);
-  const extensions = process.platform === 'win32' ? ['', ...(env.PATHEXT ?? '.EXE;.CMD;.BAT').split(';')] : [''];
+/**
+ * `platform` is injectable so the Windows lookup rules are tested on every OS.
+ * On Windows a command is found the way cmd.exe finds it: only names ending in
+ * a PATHEXT extension count (so npm's `opencode.cmd`, not its bash shim), and
+ * there is no execute bit to check.
+ */
+export function detectHarnesses(
+  root: string,
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): HarnessDetection[] {
+  const windows = platform === 'win32';
+  const pathDirs = (env.PATH ?? '').split(windows ? ';' : ':').filter(Boolean);
+  // Windows file names ignore case; lowercasing keeps the lookup identical on case-sensitive disks.
+  const extensions = windows
+    ? (env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean).map((ext) => ext.toLowerCase())
+    : [''];
+  const isCommand = windows ? isFile : isExecutableFile;
 
   return SIGNATURES.map(({ id, label, markers, binaries }) => {
     const signals: string[] = [];
@@ -36,14 +51,22 @@ export function detectHarnesses(root: string, env: NodeJS.ProcessEnv = process.e
       if (existsSync(full)) signals.push(statSync(full).isDirectory() ? `${marker}/` : marker);
     }
     for (const binary of binaries) {
-      const onPath = pathDirs.some((dir) => extensions.some((ext) => isExecutable(join(dir, binary + ext))));
+      const onPath = pathDirs.some((dir) => extensions.some((ext) => isCommand(join(dir, binary + ext))));
       if (onPath) signals.push(`${binary} on PATH`);
     }
     return { id, label, found: signals.length > 0, signals };
   });
 }
 
-function isExecutable(file: string): boolean {
+function isFile(file: string): boolean {
+  try {
+    return statSync(file).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function isExecutableFile(file: string): boolean {
   try {
     accessSync(file, constants.X_OK);
     return statSync(file).isFile();

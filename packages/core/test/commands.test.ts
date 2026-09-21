@@ -2,7 +2,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync }
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { LEDGER_IDENTITY, LEDGER_REF, LedgerMetaSchema, STATE_DIR } from '@deepblame/protocol';
-import { NotARepositoryError, init, status } from '../src';
+import { NotARepositoryError, detectHarnesses, init, status } from '../src';
 import { makeRepo, scratchDir, sh } from './helpers';
 
 const NOW = new Date('2026-09-21T20:00:00.000Z');
@@ -105,7 +105,8 @@ describe('state directory', () => {
 });
 
 describe('agent detection', () => {
-  it('finds agents by project markers and by binaries on PATH', () => {
+  // Needs real execute bits, so it runs on macOS and Linux. The Windows rules are covered below on every OS.
+  it.skipIf(process.platform === 'win32')('finds agents by project markers and by executables on PATH', () => {
     const repo = makeRepo();
     mkdirSync(join(repo, '.claude'));
     const bin = scratchDir('bin');
@@ -120,6 +121,29 @@ describe('agent detection', () => {
     expect(found).toEqual({
       opencode: ['opencode on PATH'],
       'claude-code': ['.claude/'],
+      codex: [],
+      cursor: [],
+    });
+  });
+
+  it('follows Windows lookup rules: PATHEXT extensions only, no execute bit', () => {
+    const repo = makeRepo();
+    const bin = scratchDir('winbin');
+    writeFileSync(join(bin, 'opencode.cmd'), '@echo off\r\n');
+    writeFileSync(join(bin, 'claude.exe'), '');
+    // npm also installs an extensionless bash shim; cmd.exe cannot run it, so it must not count.
+    writeFileSync(join(bin, 'codex'), '#!/bin/sh\n');
+    chmodSync(join(bin, 'codex'), 0o755);
+    // Not in this PATHEXT, so ignored.
+    writeFileSync(join(bin, 'cursor.ps1'), '');
+
+    const found = Object.fromEntries(
+      detectHarnesses(repo, { PATH: bin, PATHEXT: '.EXE;.CMD' }, 'win32').map((h) => [h.id, h.signals]),
+    );
+
+    expect(found).toEqual({
+      opencode: ['opencode on PATH'],
+      'claude-code': ['claude on PATH'],
       codex: [],
       cursor: [],
     });

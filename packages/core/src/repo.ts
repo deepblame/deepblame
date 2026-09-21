@@ -23,7 +23,8 @@ export class NotARepositoryError extends Error {
 export function openRepo(cwd: string): Repo {
   let root: string;
   try {
-    root = git(['rev-parse', '--show-toplevel'], { cwd });
+    // resolve() turns git's forward-slash paths into native ones on Windows.
+    root = resolve(git(['rev-parse', '--show-toplevel'], { cwd }));
   } catch (error) {
     if (error instanceof GitError && error.status !== null) throw new NotARepositoryError(cwd);
     throw error;

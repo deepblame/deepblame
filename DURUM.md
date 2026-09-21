@@ -5,7 +5,7 @@
 **Son güncelleme:** 21 Eylül 2026
 **Faz:** 0 ✅ tamamlandı → sıradaki **Faz 1 (yakalama + defter)**
 **İsim:** DeepBlame ✅ kesinleşti · **Logo:** ✅ kesinleşti (`brand/`)
-**Kod:** monorepo çalışıyor, `deepblame init` ve `deepblame status` hazır, 34 test geçiyor
+**Kod:** monorepo çalışıyor, `deepblame init` ve `deepblame status` hazır, 35 test geçiyor · hedef platformlar: macOS, Linux, Windows
 
 ---
 
@@ -165,7 +165,7 @@ deepblame/
 │   ├── core/         # git plumbing, repo açma, defter genesis, durum dizini, ajan tespiti, init/status
 │   └── cli/          # `deepblame` komutu (npm paketi), esbuild ile tek dosyaya paketlenir
 ├── brand/            # logo seti
-├── .github/workflows/ci.yml   # ubuntu+macos × Node 22/24, tip + test + build + npx smoke test
+├── .github/workflows/ci.yml   # ubuntu + macOS + Windows × Node 22/24: tip + test + build + smoke
 ├── DURUM.md, README.md, LICENSE (Apache-2.0)
 ```
 
@@ -173,7 +173,7 @@ deepblame/
 
 pnpm workspaces. `protocol` ve `core` yayınlanmayan iç paketler: TS kaynağı doğrudan export ediliyor (derleme adımı yok), CLI hepsini tek dosyaya paketliyor. `core` saf ve izole test edilebilir, ileride Rust'a taşınabilir.
 
-**Komutlar:** `pnpm install` · `pnpm check` (tip + test + build) · `pnpm test` · `pnpm build` · `node packages/cli/dist/deepblame.mjs status`
+**Komutlar:** `pnpm install` · `pnpm check` (tip + test + build) · `pnpm smoke` (paketlenmiş CLI'ı temiz repoda dener) · `pnpm test` · `pnpm build` · `node packages/cli/dist/deepblame.mjs status`
 
 ## 14. Çalışma yöntemi
 
@@ -194,7 +194,7 @@ pnpm workspaces. `protocol` ve `core` yayınlanmayan iç paketler: TS kaynağı 
 - Ajan tespiti: OpenCode (`opencode.json(c)`, `.opencode/`, PATH), Claude Code (`.claude/`, `CLAUDE.md`, PATH), Codex (`.codex/`, PATH), Cursor (`.cursor/`, `.cursorrules`, PATH). `AGENTS.md` birden fazla araç tarafından okunduğu için tek başına hiçbir aracı işaret etmiyor.
 - Olay şeması (`Run`, schema_version 1): mimari dokümandaki alanlar + katı doğrulama (bilinmeyen alanı reddeder, bitişin başlangıçtan önce olmasını, kendi kendinin ebeveyni olmayı, ne öncesi ne sonrası olan dosya yazımını reddeder). sha1 ve sha256 git repoları destekli.
 
-**Doğrulama:** 34 test (protocol 10, core 13, cli 11). Test ortamı boş global git config ile çalışıyor (kimlik yok, imza yok). Ayrıca gerçek makine config'i ile (`commit.gpgsign=true`) elle smoke test: HEAD değişmedi, çalışma ağacı temiz, defter commit'i imzasız. sha256 repo ve git worktree senaryoları test edildi.
+**Doğrulama:** 35 test (protocol 10, core 14, cli 11). Test ortamı boş global git config ile çalışıyor (kimlik yok, imza yok). Ayrıca gerçek makine config'i ile (`commit.gpgsign=true`) elle smoke test: HEAD değişmedi, çalışma ağacı temiz, defter commit'i imzasız. sha256 repo ve git worktree senaryoları test edildi.
 
 **Paket:** npm tarball 47 KB, bağımlılıksız tek dosya (`dist/deepblame.mjs`, 197 KB, bilinçli olarak minify edilmedi; 173 KB'ı zod). Ölçülen süreler: `--version` ~100 ms, `status` ~150 ms (7 git çağrısı). Etkileşimli komutlar için yeterli; hook yolu için değil (bkz. Faz 1 madde 2).
 
@@ -208,6 +208,8 @@ pnpm workspaces. `protocol` ve `core` yayınlanmayan iç paketler: TS kaynağı 
 6. **CLI çıktısı ve README İngilizce** (global ürün, Show HN/GitHub kitlesi). DURUM.md Türkçe kalıyor.
 7. **Paket bilinçli olarak minify edilmiyor:** kodunu izleyen bir araca güvenmek için insanlar kodu okuyabilmeli.
 8. **Kayıt sayısı** defter ağacındaki `runs/` altından okunuyor; Faz 1'de her run `runs/<run_id>.json` olarak yazılacak.
+9. **Windows (21 Eylül):** CI matrisine `windows-latest` eklendi. Ajan tespiti Windows kurallarına göre çalışıyor: yalnızca PATHEXT uzantılı dosyalar komut sayılıyor (npm'in `opencode.cmd`'si evet, uzantısız bash kısayolu hayır), çalıştırma izni aranmıyor. Bu kurallar platform parametresiyle her işletim sisteminde test ediliyor. Repo yolları Windows'ta yerel biçimde (`C:\...`) gösteriliyor. `.gitattributes` ile satır sonları her sistemde LF. Smoke testi bash yerine Node betiği (`pnpm smoke`), sonuçları doğruluyor.
+10. **macOS düzeltmesi:** geçici klasör macOS'ta sembolik bağın arkasında (`/var` → `/private/var`), Windows CI'da kısa adla (`RUNNER~1`) görünüyor; git ise gerçek yolu veriyor. Testler bu yüzden CI'da kırılacaktı, gerçek yol kullanılarak düzeltildi.
 
 ## Faz 1 — sıradaki iş (yakalama + defter)
 
@@ -231,6 +233,7 @@ pnpm workspaces. `protocol` ve `core` yayınlanmayan iç paketler: TS kaynağı 
 - Köken motoru uzun düzenleme zincirlerinde ne kadar bozulur? (Faz 2'de 40 senaryo testiyle ölçülecek)
 - **İki makinede ayrı ayrı `init`** → iki farklı genesis commit. Senk fazında iki defter birleştirilecek (merge commit, küme birleşimi); `status` şimdilik ilk kökü gösteriyor.
 - **`git log --all` defteri de gösteriyor** (her `refs/*` gibi). Faz 1'de run'lar arttıkça gürültü olabilir; toplu commit ve dokümantasyonla ele alınacak.
+- **Windows henüz gerçek bir makinede çalıştırılmadı.** İlk gerçek doğrulama repo GitHub'a yüklenince CI'da olacak; Windows kuralları şimdilik Linux'ta taklit edilerek test edildi.
 - Çalışma şekli: Claude kendi bulut çalışma alanında kodu yazıp test ediyor, projeyi zip olarak teslim ediyor. Kullanıcının terminal kurması gerekmiyor.
 
 ## 17. Bağlam notu

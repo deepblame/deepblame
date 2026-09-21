@@ -1,12 +1,14 @@
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll } from 'vitest';
 
 // Every test runs against an empty global git config: no identity, no signing,
 // no hooks path. That is the hardest environment the CLI has to survive.
-const sandbox = mkdtempSync(join(tmpdir(), 'deepblame-test-'));
+// realpath matters: git reports canonical paths, but the temp dir is behind a
+// symlink on macOS (/var -> /private/var) and an 8.3 short name on Windows CI.
+const sandbox = realpathSync.native(mkdtempSync(join(tmpdir(), 'deepblame-test-')));
 writeFileSync(join(sandbox, 'empty-gitconfig'), '');
 process.env.GIT_CONFIG_GLOBAL = join(sandbox, 'empty-gitconfig');
 process.env.GIT_CONFIG_NOSYSTEM = '1';
