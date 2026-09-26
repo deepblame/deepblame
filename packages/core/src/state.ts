@@ -1,10 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { CLI_NAME, SCHEMA_VERSION, STATE_DIR } from '@deepblame/protocol';
-
-const IGNORE_FILE = '.gitignore';
-const CONFIG_FILE = 'config.json';
-const QUEUE_FILE = 'queue.ndjson';
+import { CLI_NAME, CONFIG_FILE, IGNORE_FILE, QUEUE_FILE, SCHEMA_VERSION, STATE_DIR } from '@deepblame/protocol';
 
 export interface StateDirInfo {
   /** Absolute path of the worktree's state directory. */
@@ -14,12 +10,17 @@ export interface StateDirInfo {
   queued: number;
 }
 
+export interface StateDirOptions {
+  /** Written into the config so the capture path can hash blobs without git. */
+  objectFormat?: 'sha1' | 'sha256';
+}
+
 /**
  * Creates the per-worktree state directory. It carries its own `.gitignore`
  * containing `*`, so it can never be committed and the user's own
  * `.gitignore` is never touched. Existing files are left as they are.
  */
-export function ensureStateDir(root: string, now: Date): { path: string; created: boolean } {
+export function ensureStateDir(root: string, now: Date, options: StateDirOptions = {}): { path: string; created: boolean } {
   const path = join(root, STATE_DIR);
   const created = !existsSync(path);
   mkdirSync(path, { recursive: true });
@@ -31,6 +32,13 @@ export function ensureStateDir(root: string, now: Date): { path: string; created
       {
         schema_version: SCHEMA_VERSION,
         created_at: now.toISOString(),
+        object_format: options.objectFormat ?? 'sha1',
+        capture: {
+          // A one-line summary of each prompt, so `deepblame log` reads like history.
+          intent: true,
+          // The prompt itself is not recorded unless the repository asks for it.
+          prompt_text: false,
+        },
         // Prompt text stays on this machine unless the team opts in.
         sync: { prompt_text: false },
       },

@@ -5,7 +5,8 @@
   "description": "Git plumbing, ledger and repository setup. Bundled into the CLI, never published on its own.",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./capture": "./src/capture.ts"
   },
   "dependencies": {
     "@deepblame/protocol": "workspace:*"

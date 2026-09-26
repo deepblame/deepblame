@@ -1,5 +1,8 @@
+import { writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { LEDGER_REF } from '@deepblame/protocol';
+import { capture } from '../src/capture';
 import { VERSION, main } from '../src/main';
 import { makeRepo, scratchDir } from '../../core/test/helpers';
 
@@ -94,5 +97,93 @@ describe('deepblame cli', () => {
     expect(code).toBe(2);
     expect(err).toContain(message);
     expect(err).toContain("See 'deepblame --help'.");
+  });
+});
+
+const SESSION = '3c9a71e4-55d2-4f8b-9a11-0b2c3d4e5f60';
+
+/** One hook call, exactly as the installed command receives it. */
+function hook(repo: string, event: Record<string, unknown>): number {
+  return capture(['--agent', 'claude-code'], {
+    cwd: repo,
+    env: { PATH: '' },
+    stdin: () => JSON.stringify({ session_id: SESSION, cwd: repo, ...event }),
+  });
+}
+
+describe('recording through the cli', () => {
+  it('captures a turn, seals it on log and shows it in full', () => {
+    const repo = makeRepo({ commits: true });
+    run(['init'], repo);
+    const file = join(repo, 'app.ts');
+
+    expect(hook(repo, { hook_event_name: 'UserPromptSubmit', prompt: 'rename the answer' })).toBe(0);
+    hook(repo, { hook_event_name: 'PreToolUse', tool_name: 'Edit', tool_input: { file_path: file } });
+    writeFileSync(file, 'export const theAnswer = 42;\n');
+    hook(repo, {
+      hook_event_name: 'PostToolUse',
+      tool_name: 'Edit',
+      tool_input: { file_path: file, old_string: 'answer', new_string: 'theAnswer' },
+      tool_response: {},
+    });
+    hook(repo, { hook_event_name: 'Stop' });
+
+    const listed = run(['log'], repo);
+    expect(listed.code).toBe(0);
+    expect(listed.out).toContain('rename the answer');
+    expect(listed.out).toContain('claude-code');
+    expect(listed.out).toContain('1 run shown');
+
+    const asJson = JSON.parse(run(['log', '--json'], repo).out);
+    const id = asJson.runs[0].run.run_id;
+    const shown = run(['show', id], repo);
+    expect(shown.code).toBe(0);
+    expect(shown.out).toContain(`run ${id}`);
+    expect(shown.out).toContain('app.ts');
+    expect(shown.out).toContain('Edit ×1');
+
+    expect(run(['status'], repo).out).toContain('1 run recorded');
+  });
+
+  it('says so when there is nothing recorded or nothing to seal', () => {
+    const repo = makeRepo({ commits: true });
+    run(['init'], repo);
+    expect(run(['log'], repo).out).toContain('No agent runs recorded yet.');
+    expect(run(['seal'], repo).out).toContain('Nothing to seal');
+  });
+
+  it('installs and removes capture hooks', () => {
+    const repo = makeRepo({ commits: true });
+    run(['init'], repo);
+
+    const installed = run(['hooks', 'install'], repo);
+    expect(installed.code).toBe(0);
+    expect(installed.out).toContain('.claude/settings.json');
+    expect(run(['hooks', 'status'], repo).out).toContain('capture  on');
+    expect(run(['status'], repo).out).toContain('recording  on');
+
+    expect(run(['hooks', 'uninstall'], repo).out).toContain('removed');
+    expect(run(['hooks', 'status'], repo).out).toContain('capture  off');
+  });
+
+  it('reports a run id nobody has', () => {
+    const repo = makeRepo({ commits: true });
+    run(['init'], repo);
+    const { code, err } = run(['show', 'deadbeef'], repo);
+    expect(code).toBe(1);
+    expect(err).toContain("no run matches 'deadbeef'");
+  });
+
+  it.each([
+    [['show'], 'deepblame show needs a run id'],
+    [['hooks'], 'deepblame hooks needs install, uninstall or status'],
+    [['hooks', 'fly'], "unknown hooks action 'fly'"],
+    [['log', '--limit', 'ten'], '--limit needs a positive number'],
+  ])('rejects %j with exit code 2', (args, message) => {
+    const repo = makeRepo({ commits: true });
+    run(['init'], repo);
+    const { code, err } = run(args, repo);
+    expect(code).toBe(2);
+    expect(err).toContain(message);
   });
 });

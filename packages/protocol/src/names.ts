@@ -20,3 +20,13 @@ export const LEDGER_IDENTITY = {
   name: PRODUCT_NAME,
   email: `ledger@${CLI_NAME}.dev`,
 } as const;
+
+/**
+ * Files inside the state directory. Named here because the capture hot path
+ * reads them without loading the rest of the protocol.
+ */
+export const QUEUE_FILE = 'queue.ndjson';
+export const CONFIG_FILE = 'config.json';
+export const IGNORE_FILE = '.gitignore';
+export const SEAL_LOCK_FILE = 'seal.lock';
+export const SEAL_INDEX_FILE = 'seal.index';

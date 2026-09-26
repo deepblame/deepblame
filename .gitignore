@@ -4,3 +4,4 @@ coverage/
 *.tgz
 .deepblame/
 .DS_Store
+.claude/settings.local.json

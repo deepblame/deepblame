@@ -36,14 +36,6 @@ export function detectHarnesses(
   env: NodeJS.ProcessEnv = process.env,
   platform: NodeJS.Platform = process.platform,
 ): HarnessDetection[] {
-  const windows = platform === 'win32';
-  const pathDirs = (env.PATH ?? '').split(windows ? ';' : ':').filter(Boolean);
-  // Windows file names ignore case; lowercasing keeps the lookup identical on case-sensitive disks.
-  const extensions = windows
-    ? (env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean).map((ext) => ext.toLowerCase())
-    : [''];
-  const isCommand = windows ? isFile : isExecutableFile;
-
   return SIGNATURES.map(({ id, label, markers, binaries }) => {
     const signals: string[] = [];
     for (const marker of markers) {
@@ -51,11 +43,26 @@ export function detectHarnesses(
       if (existsSync(full)) signals.push(statSync(full).isDirectory() ? `${marker}/` : marker);
     }
     for (const binary of binaries) {
-      const onPath = pathDirs.some((dir) => extensions.some((ext) => isCommand(join(dir, binary + ext))));
-      if (onPath) signals.push(`${binary} on PATH`);
+      if (commandOnPath(binary, env, platform)) signals.push(`${binary} on PATH`);
     }
     return { id, label, found: signals.length > 0, signals };
   });
+}
+
+/** The same lookup, used on its own to decide how to spell a hook command. */
+export function commandOnPath(
+  name: string,
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  const windows = platform === 'win32';
+  const pathDirs = (env.PATH ?? '').split(windows ? ';' : ':').filter(Boolean);
+  // Windows file names ignore case; lowercasing keeps the lookup identical on case-sensitive disks.
+  const extensions = windows
+    ? (env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean).map((ext) => ext.toLowerCase())
+    : [''];
+  const isCommand = windows ? isFile : isExecutableFile;
+  return pathDirs.some((dir) => extensions.some((ext) => isCommand(join(dir, name + ext))));
 }
 
 function isFile(file: string): boolean {

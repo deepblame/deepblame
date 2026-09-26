@@ -2,10 +2,10 @@
 
 > **Yeni sohbete başlarken bu dosyayı yükle.** Projenin ne olduğunu, nerede kaldığımızı ve neden bu kararları verdiğimizi anlatır. Mimari doküman "ne yapılacak"ı, bu dosya "ne yapıldı ve neden"i anlatır.
 
-**Son güncelleme:** 21 Eylül 2026
-**Faz:** 0 ✅ tamamlandı → sıradaki **Faz 1 (yakalama + defter)**
-**İsim:** DeepBlame ✅ kesinleşti · **Logo:** ✅ kesinleşti (`brand/`)
-**Kod:** monorepo çalışıyor, `deepblame init` ve `deepblame status` hazır, 35 test geçiyor · hedef platformlar: macOS, Linux, Windows
+**Son güncelleme:** 26 Eylül 2026
+**Faz:** 0 ✅ · **Faz 1 yarısı ✅** (Claude Code kaydı uçtan uca çalışıyor) → kalan: diğer adaptörler + indeks
+**İsim:** DeepBlame ✅ kesinleşti · **Logo:** ✅ kesinleşti (`brand/`) · **GitHub org `deepblame` ✅ alındı**
+**Kod:** `init`, `status`, `log`, `show`, `seal`, `hooks` çalışıyor; bir ajan turu kaydedilip deftere mühürleniyor. 59 test geçiyor · hedef platformlar: macOS, Linux, Windows
 
 ---
 
@@ -23,8 +23,8 @@ Birden fazla yapay zekâ ajanının aynı kod tabanında çalıştığı yazıl�
 |---|---|
 | `deepblame.com` | ✅ Boş — alınacak |
 | `deepblame.dev` | ✅ Boş — alınacak |
-| npm `deepblame` | ✅ Boş (404 doğrulandı) |
-| GitHub org `deepblame` | ⬜ Kontrol edilecek |
+| npm `deepblame` | ✅ Boş (26 Eylül'de tekrar doğrulandı) |
+| GitHub org `deepblame` | ✅ Alındı (26 Eylül) — repo henüz push edilmedi |
 
 **Neden bu isim:** Her geliştirici `git blame`'i bilir. "DeepBlame" duyunca ne olduğunu anında anlıyor — açık kaynak dağıtımında sıfır açıklama gerektiren bir isim büyük avantaj. Ayrıca üç varlığın (com, dev, npm) birden boş olması nadir.
 
@@ -64,6 +64,8 @@ Atıf mekanizma, satılan şey sonuç.
 3. Codex (sarmalayıcı süreç)
 4. Cursor (dosya izleyici, istem alınamıyor)
 5. Genel/bilinmeyen (git hook yedeklemesi — her zaman çalışır)
+
+**Faz 1'de sıra değişti:** önce **Claude Code** yazıldı. Sebep: OpenCode'un eklenti API'sini doğrulamak için dokümantasyona erişmek gerekiyordu ve erişilemedi; Claude Code'un hook yüzeyi ise elimizde kesin olarak var. Yakalama katmanı adaptörden bağımsız yazıldığı için OpenCode eklemek artık tek dosyalık iş.
 
 ## 6. Ticari model
 
@@ -148,7 +150,7 @@ Atıf mekanizma, satılan şey sonuç.
 
 ## 12. Performans bütçeleri (kabul kriteri, hedef değil)
 
-- Hook ek yükü p95: **< 15 ms**
+- Hook ek yükü p95: **< 15 ms** — ⚠️ **şu an ~55 ms** (ölçüm: bulut konteynerinde 20 çağrı ortalaması; bunun 27 ms'i Node'un kendi açılışı). Node süreci başına düşen maliyet bu bütçenin altına inemez. Faz 2'de daemon + ince istemci ile çözülecek; o zamana kadar gerçek rakam burada yazılı duracak. Karşılaştırma: tam CLI ile 70 ms, ayrı `deepblame-capture` paketiyle 55 ms.
 - `blame` 5.000 satır p95: **< 200 ms**
 - Daemon boşta CPU: **< 1%** · Bellek: **< 120 MB**
 - Defter büyümesi: **< 2 KB/run**
@@ -161,9 +163,9 @@ Atıf mekanizma, satılan şey sonuç.
 ```
 deepblame/
 ├── packages/
-│   ├── protocol/     # isim sabitleri (TEK yer), Run olay şeması, defter meta şeması — zod
-│   ├── core/         # git plumbing, repo açma, defter genesis, durum dizini, ajan tespiti, init/status
-│   └── cli/          # `deepblame` komutu (npm paketi), esbuild ile tek dosyaya paketlenir
+│   ├── protocol/     # isim sabitleri (TEK yer), Run şeması, defter meta şeması (zod) + kuyruk olay tipleri (bağımlılıksız)
+│   ├── core/         # git plumbing, defter, durum dizini, tespit, yakalama (capture), mühürleyici (seal), hook kurulumu, okuma (runs)
+│   └── cli/          # `deepblame` + `deepblame-capture` komutları, esbuild ile iki dosyaya paketlenir
 ├── brand/            # logo seti
 ├── .github/workflows/ci.yml   # ubuntu + macOS + Windows × Node 22/24: tip + test + build + smoke
 ├── DURUM.md, README.md, LICENSE (Apache-2.0)
@@ -211,32 +213,58 @@ pnpm workspaces. `protocol` ve `core` yayınlanmayan iç paketler: TS kaynağı 
 9. **Windows (21 Eylül):** CI matrisine `windows-latest` eklendi. Ajan tespiti Windows kurallarına göre çalışıyor: yalnızca PATHEXT uzantılı dosyalar komut sayılıyor (npm'in `opencode.cmd`'si evet, uzantısız bash kısayolu hayır), çalıştırma izni aranmıyor. Bu kurallar platform parametresiyle her işletim sisteminde test ediliyor. Repo yolları Windows'ta yerel biçimde (`C:\...`) gösteriliyor. `.gitattributes` ile satır sonları her sistemde LF. Smoke testi bash yerine Node betiği (`pnpm smoke`), sonuçları doğruluyor.
 10. **macOS düzeltmesi:** geçici klasör macOS'ta sembolik bağın arkasında (`/var` → `/private/var`), Windows CI'da kısa adla (`RUNNER~1`) görünüyor; git ise gerçek yolu veriyor. Testler bu yüzden CI'da kırılacaktı, gerçek yol kullanılarak düzeltildi.
 
-## Faz 1 — sıradaki iş (yakalama + defter)
+## 16. Faz 1 — ne yapıldı (26 Eylül 2026)
 
-1. Defter kayıt formatı: `runs/<run_id>.json`, commit başına bir veya toplu run, hash zinciri alanı.
-2. **`deepblame capture`**: zod içermeyen ayrı, çok hafif giriş noktası (bütçe <15 ms). Olayı stdin'den alır, `queue.ndjson`'a ekler, çıkar. Ana paket 197 KB olduğu için hook yolu ayrı bir dosya olmalı.
-3. Mühürleyici: kuyruğu zod ile doğrular, deftere yazar (önce komut olarak, sonra daemon).
-4. OpenCode adaptörü (öncelik 1), sonra Claude Code hook'ları, sonra git yedek hook'u (post-commit).
-5. `init` hook'ları kurar; `deepblame uninstall` her şeyi geri alır.
-6. SQLite indeks.
-7. Kendi repomuzda dogfood: bu repoda yapılan ajan çalışmaları eksiksiz kaydediliyor mu.
+**Ürün artık gerçekten kaydediyor.** Claude Code bir dosyaya dokunduğunda, o turun tamamı deftere bir run kaydı olarak giriyor.
+
+**Akış:** hook → `deepblame-capture` (kuyruğa bir satır) → ajan durunca mühürleyici → `refs/deepblame/ledger` içinde `runs/<run_id>.json`.
+
+- **Yakalama (`packages/core/src/capture.ts`)** — sıcak yol. Şema kütüphanesi yok, git süreci yok, ağ yok, `try/catch` ile sarılı: yakalama hatası ajanı asla bloklamaz, hiçbir şey stdout'a yazmaz, her zaman 0 ile çıkar. Repo kökünü `.git`'i yukarı doğru arayarak bulur (git çağırmadan). Dosya blob oid'lerini git ile birebir aynı şekilde kendisi hesaplar (sha1 ve sha256 repoları, testte `git hash-object` ile karşılaştırılıyor). 4 MB üstü ve ikili dosyalar sadece yol olarak kaydedilir.
+- **Ayrı paket (`deepblame-capture`, 9,7 KB)** — ana CLI 259 KB olduğu için hook yolu kendi paketini kullanıyor: 70 ms yerine 55 ms.
+- **Satır aralıkları** — `Edit`/`MultiEdit` için hunk'lar, düzenlemeden *sonraki* dosya üzerinden hesaplanıyor: değişen metnin öncesi aynı kaldığı için yeni metnin satır numarası eskisinin de satır numarasıdır. Boş `new_string` (saf silme) konumlandırılamıyor, hunk üretilmiyor — Faz 2'de pre içeriği saklanınca çözülecek.
+- **Mühürleyici (`seal.ts`)** — kuyruğu turlara böler (bir istem turu açar, `Stop`/`SessionEnd` kapatır, ikinci istem öncekini kapatır), her kapalı turu zod ile doğrular, geçersizse *reddedip* sebebini bildirir. Yazma: kendi geçici index dosyasıyla (`GIT_INDEX_FILE`) `read-tree` → `update-index` → `write-tree` → `commit-tree` → `update-ref` (eski değer verilerek, yarış varsa 3 deneme). Kullanıcının index'ine, HEAD'ine, çalışma ağacına dokunulmuyor.
+- **Kuyruk güvenliği** — kilit dosyası (60 sn'de bayatlar), yarım yazılmış son satır korunur, mühürleme sırasında gelen olaylar kaybolmaz, bitmemiş tur kuyrukta bekler.
+- **Claude Code adaptörü (`hooks.ts`)** — `.claude/settings.json` içine 6 hook: SessionStart, UserPromptSubmit, PreToolUse (yalnızca dosya yazan araçlar), PostToolUse (tümü), Stop, SessionEnd. Kullanıcının mevcut ayarları ve kendi hook'ları olduğu gibi kalıyor; `hooks uninstall` yalnızca bizimkileri siliyor.
+- **`init` artık hook'ları da kuruyor** (ajan tespit edildiyse). `--no-hooks` ile atlanır, `--local` ile `settings.local.json`'a yazılır. Kurulan komut: PATH'te varsa `deepblame-capture`, yoksa paketin yanındaki `capture.mjs` mutlak yolla.
+- **Okuma** — `deepblame log` (tek `git cat-file --batch` süreciyle tüm run'lar), `deepblame show <run>` (git gibi ön ek eşleşmesi), `deepblame seal`, `deepblame hooks install|uninstall|status`.
+- **Gizlilik** — deftere istem metni girmiyor; sadece sha256'sı ve isteğe bağlı tek satırlık "intent" (`.deepblame/config.json` → `capture.intent`, `capture.prompt_text`). Makine ve worktree kimlikleri hash'li (`hostId`, `worktreeId`), okunabilir yol veya kullanıcı adı yok.
+- **Doğrulama:** 59 test (protocol 10, core 30, cli 19) + `pnpm smoke`: paketlenmiş CLI temiz bir repoda kuruluyor, bir ajan turu hook'lar üzerinden besleniyor, run deftere düşüyor, `git status` yalnızca ajanın düzenlediği dosyayı gösteriyor.
+
+### Faz 1'de verilen kararlar
+
+11. **`init` hook'ları kendiliğinden kuruyor.** Doküman ayrı bir komut öngörüyordu. Gerekçe: "kur ve çalışsın" deneyimi; ne yapıldığı çıktıda açıkça yazıyor ve tek komutla geri alınabiliyor.
+12. **İki paket (`deepblame` + `deepblame-capture`).** Sıcak yolun 259 KB'lık paketi ayrıştırması saçma; ayrı 9,7 KB'lık paket 15 ms kazandırıyor.
+13. **Turlar istemle başlar, `Stop` ile biter.** Oturum değil tur = run. Bitmemiş tur mühürlenmez, kuyrukta bekler; yarım bir run kaydından iyidir.
+14. **Blob içerikleri henüz saklanmıyor**, yalnızca oid'ler. Cerrahi geri alma için içerik gerekecek (Faz 3); defter ağacına `blobs/` eklenecek ki git gc silmesin. Kod hiçbir zaman senkronize edilmeyecek, sadece yerelde durur.
+15. **Boş turlar kaydedilmiyor** (araç çağrısı, okuma ve yazma yoksa) — defteri gürültüyle doldurmamak için.
+16. **`log` ve `show` kendiliğinden mühürlüyor** (`--no-seal` ile kapatılır): hook'lar bir sebeple çalışmadıysa bile kayıt kaybolmaz.
+
+### Faz 1'den kalanlar
+
+1. **OpenCode adaptörü** (eklenti API'si doğrulanacak), sonra Codex, sonra git yedek hook'u (`post-commit` → commit'i son run'a bağlar).
+2. **Model ve maliyet:** Claude Code'un transcript dosyası (`transcript_path` kuyrukta saklanıyor) okunup token kullanımı ve model adı run'a yazılacak. Maliyet paneli bunun üstüne kurulacak.
+3. **SQLite indeks** — `log` şu an her run blob'unu okuyor; yüzlerce run'da yavaşlar.
+4. **Daemon** — hook başına 55 ms'yi 15 ms'nin altına indirmek için.
+5. **Kendi üstümüzde dogfood:** hook'lar bu repoya kuruldu ama Claude Code ayarları oturum başında okuduğu için gerçek kayıt bir sonraki oturumda başlayacak. İlk gerçek run'lar orada görülecek.
 
 **Paralel (kullanıcı):**
 - `deepblame.com` ve `deepblame.dev` alınacak
-- GitHub org `deepblame` alınacak → bu repo oraya push edilecek (CI hazır)
-- npm hesabı açılacak; paket adı ilk yayınla rezerve edilir
+- Repo GitHub org'a push edilecek (org açıldı, CI hazır, ilk gerçek Windows koşusu orada olacak)
+- npm hesabı açılacak (2FA); `deepblame` adı ilk yayınla rezerve edilecek
 
-## 16. Açık sorular
+## 17. Açık sorular
 
-- GitHub org `deepblame` müsait mi?
+- **Claude Code hook şeması kendi bilgimizden yazıldı** (dokümantasyona erişilemedi: alan adı izin istedi, kullanıcı reddetti). Alan adları (`hook_event_name`, `tool_name`, `tool_input.file_path`, `old_string`/`new_string`, `session_id`) doğru biliniyor ama **gerçek bir Claude Code oturumunda henüz doğrulanmadı.** İlk dogfood turunda kontrol edilecek; yanlış alan varsa `capture.ts` içinde tek yerde düzelir.
 - Cursor'un hook yüzeyi yeterli mi? (Faz 8'e ertelendi)
 - Köken motoru uzun düzenleme zincirlerinde ne kadar bozulur? (Faz 2'de 40 senaryo testiyle ölçülecek)
 - **İki makinede ayrı ayrı `init`** → iki farklı genesis commit. Senk fazında iki defter birleştirilecek (merge commit, küme birleşimi); `status` şimdilik ilk kökü gösteriyor.
 - **`git log --all` defteri de gösteriyor** (her `refs/*` gibi). Faz 1'de run'lar arttıkça gürültü olabilir; toplu commit ve dokümantasyonla ele alınacak.
 - **Windows henüz gerçek bir makinede çalıştırılmadı.** İlk gerçek doğrulama repo GitHub'a yüklenince CI'da olacak; Windows kuralları şimdilik Linux'ta taklit edilerek test edildi.
-- Çalışma şekli: Claude kendi bulut çalışma alanında kodu yazıp test ediyor, projeyi zip olarak teslim ediyor. Kullanıcının terminal kurması gerekmiyor.
+- **Hook gecikmesi 55 ms** — bütçe 15 ms. Kullanıcılar bunu fark eder mi? Daemon'a ne zaman geçmeliyiz? (bkz. 12)
+- **`init` ajan ayar dosyasını değiştiriyor.** Kullanıcılar bunu saygısızlık olarak görür mü, yoksa kolaylık mı? İlk geri bildirimlerde ölçülecek; `--no-hooks` var.
+- Çalışma şekli: Claude kendi bulut çalışma alanında kodu yazıp test ediyor, projeyi zip olarak teslim ediyor. Kullanıcının terminal kurması gerekmiyor. Bu oturumun GitHub'a doğrudan yazma erişimi yok (API repo'ya bağlı olmayan çağrıları reddediyor), o yüzden push kullanıcıda.
 
-## 17. Bağlam notu
+## 18. Bağlam notu
 
 İki haftalık fikir arama sürecinden sonra bu projede karar kılındı. Elenenler ve sebepleri: ses klonlama (ElevenLabs 11 mlr $), kod inceleme (CodeRabbit 1,5 mlr $), ajan hafızası (Mem0/Cognee fonlanmış), WhatsApp CRM (komoditize), tokenizasyon (Chainlink altyapıyı tutmuş), cihaz test çiftliği (4+ ekip aynı anda yapıyor), viral trend aracı "Whyral" (Virlo'nun SEO hendeği + 7 ödeyen rakip).
 

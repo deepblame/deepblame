@@ -5,7 +5,9 @@
   "description": "Event schema and shared constants. Bundled into the CLI, never published on its own.",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./names": "./src/names.ts",
+    "./queue": "./src/queue.ts"
   },
   "dependencies": {
     "zod": "^4.6.5"
