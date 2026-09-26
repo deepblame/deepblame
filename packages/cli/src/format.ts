@@ -231,11 +231,19 @@ function shortRun(entry: LedgerRun): string {
   return entry.run.run_id.replace(/-/g, '').slice(0, 7);
 }
 
+/** Shows paths the way the project talks about them, with forward slashes on every OS. */
 function relativeTo(root: string, files: readonly string[]): string {
-  const prefix = root.endsWith('/') || root.endsWith('\\') ? root : `${root}/`;
+  const base = slashes(root).replace(/\/+$/, '');
   return files
-    .map((file) => (file.startsWith(prefix) ? file.slice(prefix.length).split('\\').join('/') : file))
+    .map((file) => {
+      const path = slashes(file);
+      return path.startsWith(`${base}/`) ? path.slice(base.length + 1) : path;
+    })
     .join(', ');
+}
+
+function slashes(path: string): string {
+  return path.split('\\').join('/');
 }
 
 function clip(text: string, width: number): string {

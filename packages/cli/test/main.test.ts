@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { LEDGER_REF } from '@deepblame/protocol';
 import { capture } from '../src/capture';
+import { formatHooks, makeStyle } from '../src/format';
 import { VERSION, main } from '../src/main';
 import { makeRepo, scratchDir } from '../../core/test/helpers';
 
@@ -164,6 +165,17 @@ describe('recording through the cli', () => {
 
     expect(run(['hooks', 'uninstall'], repo).out).toContain('removed');
     expect(run(['hooks', 'status'], repo).out).toContain('capture  off');
+  });
+
+  it('shortens settings paths the same way on every platform', () => {
+    const report = {
+      repo: { root: 'C:\\Users\\dev\\app' },
+      action: 'install',
+      changes: [{ file: 'C:\\Users\\dev\\app\\.claude\\settings.json', installed: true, changed: true, command: 'deepblame-capture' }],
+      files: [],
+      harnesses: [],
+    } as unknown as Parameters<typeof formatHooks>[0];
+    expect(formatHooks(report, makeStyle(false))).toContain('.claude/settings.json');
   });
 
   it('reports a run id nobody has', () => {
