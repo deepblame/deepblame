@@ -1,0 +1,7 @@
+# The extension ships as one bundled file. Source, tests and build scripts stay
+# in the repository, where they are readable, rather than inside every install.
+src/**
+test/**
+scripts/**
+node_modules/**
+.vscodeignore
