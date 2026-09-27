@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { QUEUE_FILE, STATE_DIR } from '@deepblame/protocol';
 import { appendEvents, captureClaudeCode, gitBlobOid, openCapture } from '../src/capture';
-import { init, status } from '../src/commands';
+import { cost, init, status } from '../src/commands';
 import { hooksInstalled, installClaudeCode, uninstallClaudeCode } from '../src/hooks';
 import { openRepo } from '../src/repo';
 import { listRuns } from '../src/runs';
@@ -211,6 +211,116 @@ describe('capture', () => {
     editTurn(root, 'sha256 please', 'answer', 'theAnswer');
     expect(seal(openRepo(root), { now: T2 }).sealed).toBe(1);
     expect(listRuns(openRepo(root))[0]?.run.files_written[0]?.post_blob_sha).toHaveLength(64);
+  });
+});
+
+describe('cost', () => {
+  const MODEL = 'claude-opus-4-5-20260114';
+
+  function transcript(root: string, entries: Record<string, unknown>[]): string {
+    const file = join(root, 'transcript.jsonl');
+    writeFileSync(file, `${entries.map((entry) => JSON.stringify(entry)).join('\n')}\n`);
+    return file;
+  }
+
+  function assistant(at: Date, model: string, usage: Record<string, number>): Record<string, unknown> {
+    return { type: 'assistant', timestamp: at.toISOString(), message: { role: 'assistant', model, usage } };
+  }
+
+  /** A turn that ran while the transcript was being written. */
+  function turnWithTranscript(root: string, file: string): void {
+    feed(root, { hook_event_name: 'SessionStart', source: 'startup', transcript_path: file }, T0);
+    feed(root, { hook_event_name: 'UserPromptSubmit', prompt: 'make it faster' }, T0);
+    feed(root, { hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: {}, tool_response: {} }, T1);
+    feed(root, { hook_event_name: 'Stop' }, T2);
+  }
+
+  it('prices a turn from the usage the harness recorded', () => {
+    const root = makeRepo({ commits: true });
+    init(root, { now: T0 });
+    const file = transcript(root, [
+      { type: 'user', timestamp: T0.toISOString() },
+      assistant(T1, MODEL, { input_tokens: 1000, output_tokens: 2000, cache_read_input_tokens: 50_000 }),
+      assistant(T1, MODEL, { input_tokens: 500, output_tokens: 1000 }),
+      // A message from a later turn must not be counted in this one.
+      assistant(new Date('2026-09-26T12:00:00.000Z'), MODEL, { input_tokens: 9_999_999, output_tokens: 9_999_999 }),
+    ]);
+    turnWithTranscript(root, file);
+
+    seal(openRepo(root), { now: T2 });
+    const run = listRuns(openRepo(root))[0]?.run;
+    expect(run?.model).toEqual({ provider: 'anthropic', name: MODEL, version: null });
+    expect(run?.cost?.input_tokens).toBe(1500);
+    expect(run?.cost?.output_tokens).toBe(3000);
+    expect(run?.cost?.cache_read_tokens).toBe(50_000);
+    // 1500 in at $15/M + 3000 out at $75/M + 50k cached reads at $1.50/M.
+    expect(run?.cost?.usd).toBeCloseTo(0.0225 + 0.225 + 0.075, 6);
+    expect(run?.cost?.source).toBe('rates');
+  });
+
+  it('records the tokens but no money when the model has no known rate', () => {
+    const root = makeRepo({ commits: true });
+    init(root, { now: T0 });
+    turnWithTranscript(root, transcript(root, [assistant(T1, 'some-new-model-2027', { input_tokens: 10, output_tokens: 20 })]));
+
+    seal(openRepo(root), { now: T2 });
+    const run = listRuns(openRepo(root))[0]?.run;
+    expect(run?.cost?.input_tokens).toBe(10);
+    expect(run?.cost?.usd).toBeNull();
+  });
+
+  it('uses a rate the repository wrote into its own config', () => {
+    const root = makeRepo({ commits: true });
+    init(root, { now: T0 });
+    const config = join(root, STATE_DIR, 'config.json');
+    const current: Record<string, unknown> = JSON.parse(readFileSync(config, 'utf8'));
+    writeFileSync(config, JSON.stringify({ ...current, pricing: { 'some-new-model': { input: 2, output: 10 } } }, null, 2));
+    turnWithTranscript(root, transcript(root, [assistant(T1, 'some-new-model-2027', { input_tokens: 1_000_000, output_tokens: 100_000 })]));
+
+    seal(openRepo(root), { now: T2 });
+    expect(listRuns(openRepo(root))[0]?.run.cost?.usd).toBeCloseTo(2 + 1, 6);
+  });
+
+  it('believes the harness when it reports the money itself', () => {
+    const root = makeRepo({ commits: true });
+    init(root, { now: T0 });
+    const entry = assistant(T1, MODEL, { input_tokens: 10, output_tokens: 10 });
+    turnWithTranscript(root, transcript(root, [{ ...entry, costUSD: 0.42 }]));
+
+    seal(openRepo(root), { now: T2 });
+    const run = listRuns(openRepo(root))[0]?.run;
+    expect(run?.cost?.usd).toBe(0.42);
+    expect(run?.cost?.source).toBe('harness');
+  });
+
+  it('survives a transcript that is missing, empty or nonsense', () => {
+    const root = makeRepo({ commits: true });
+    init(root, { now: T0 });
+    writeFileSync(join(root, 'broken.jsonl'), 'not json\n{"type":"assistant"}\n\n');
+    turnWithTranscript(root, join(root, 'broken.jsonl'));
+    expect(seal(openRepo(root), { now: T2 }).sealed).toBe(1);
+    expect(listRuns(openRepo(root))[0]?.run.cost).toBeUndefined();
+
+    const other = makeRepo({ commits: true });
+    init(other, { now: T0 });
+    turnWithTranscript(other, join(other, 'does-not-exist.jsonl'));
+    expect(seal(openRepo(other), { now: T2 }).sealed).toBe(1);
+    expect(listRuns(openRepo(other))[0]?.run.model).toBeNull();
+  });
+
+  it('adds the spend up by model and by agent', () => {
+    const root = makeRepo({ commits: true });
+    init(root, { now: T0 });
+    turnWithTranscript(root, transcript(root, [assistant(T1, MODEL, { input_tokens: 1_000_000, output_tokens: 0 })]));
+    seal(openRepo(root), { now: T2 });
+
+    const report = cost(root, { now: T2, seal: false });
+    expect(report.runs).toBe(1);
+    expect(report.totals.usd).toBeCloseTo(15, 6);
+    expect(report.byModel[0]?.key).toBe(MODEL);
+    expect(report.byAgent[0]?.key).toBe('claude-code');
+    // A window that ends before the run started leaves nothing to count.
+    expect(cost(root, { now: new Date('2026-10-30T00:00:00.000Z'), days: 1, seal: false }).runs).toBe(0);
   });
 });
 

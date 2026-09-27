@@ -5,6 +5,7 @@ import {
   GitError,
   NotARepositoryError,
   commandOnPath,
+  cost,
   hooks,
   init,
   log,
@@ -16,6 +17,7 @@ import {
 import { CLI_NAME } from '@deepblame/protocol';
 import pkg from '../package.json' with { type: 'json' };
 import {
+  formatCost,
   formatHooks,
   formatInit,
   formatLog,
@@ -49,12 +51,14 @@ Usage
   ${CLI_NAME} status           show what is set up and what is recorded
   ${CLI_NAME} log              list recorded agent runs, newest first
   ${CLI_NAME} show <run>       show one run in full
+  ${CLI_NAME} cost             what the agents spent, by model and agent
   ${CLI_NAME} seal             fold captured events into the ledger now
   ${CLI_NAME} hooks <action>   install, uninstall or check capture hooks
 
 Options
   -C <dir>        run as if started in <dir>
   --limit <n>     how many runs to list (default ${DEFAULT_LIMIT})
+  --days <n>      only count the last <n> days in cost
   --local         keep hooks in .claude/settings.local.json, uncommitted
   --no-hooks      set up without touching your agent's settings
   --no-seal       list only what is already in the ledger
@@ -77,6 +81,7 @@ export function main(argv: readonly string[], io: Io): number {
       options: {
         cwd: { type: 'string', short: 'C' },
         limit: { type: 'string' },
+        days: { type: 'string' },
         local: { type: 'boolean' },
         'no-hooks': { type: 'boolean' },
         'no-seal': { type: 'boolean' },
@@ -111,6 +116,11 @@ export function main(argv: readonly string[], io: Io): number {
     limit = Number(values.limit);
     if (!Number.isInteger(limit) || limit < 1) return usageError(io, `--limit needs a positive number`);
   }
+  let days: number | undefined;
+  if (values.days !== undefined) {
+    days = Number(values.days);
+    if (!Number.isInteger(days) || days < 1) return usageError(io, `--days needs a positive number`);
+  }
 
   try {
     switch (command) {
@@ -142,6 +152,11 @@ export function main(argv: readonly string[], io: Io): number {
           return EXIT.failure;
         }
         io.stdout(values.json ? toJson(report.entry) : formatShow(report.entry, style));
+        return EXIT.ok;
+      }
+      case 'cost': {
+        const report = cost(cwd, { env: io.env, days, seal: values['no-seal'] !== true });
+        io.stdout(values.json ? toJson(report) : formatCost(report, style));
         return EXIT.ok;
       }
       case 'seal': {

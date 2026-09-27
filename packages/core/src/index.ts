@@ -13,6 +13,8 @@ export {
   type CaptureResult,
 } from './capture';
 export { seal, type SealResult } from './seal';
+export { readTranscriptUsage, type TranscriptUsage } from './transcript';
+export { priceUsd, rateFor, readRates, type Rate, type RateTable } from './pricing';
 export { findRun, listRuns, type LedgerRun, type ListOptions } from './runs';
 export {
   claudeSettingsPath,
@@ -24,6 +26,7 @@ export {
 } from './hooks';
 export { hostId, sessionUuid, uuidV5, worktreeId } from './ids';
 export {
+  cost,
   hooks,
   init,
   log,
@@ -31,6 +34,9 @@ export {
   show,
   status,
   type CommandOptions,
+  type CostBucket,
+  type CostOptions,
+  type CostReport,
   type HookOptions,
   type HooksAction,
   type HooksReport,

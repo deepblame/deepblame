@@ -1,5 +1,6 @@
 import { CLI_NAME, LEDGER_REF, PRODUCT_NAME, STATE_DIR } from '@deepblame/protocol';
 import type {
+  CostReport,
   HarnessDetection,
   HooksReport,
   InitResult,
@@ -94,15 +95,17 @@ export function formatLog(report: LogReport, s: Style): string {
     agent: entry.run.harness.name,
     intent: clip(entry.run.task.intent ?? '', INTENT_WIDTH),
     touched: `${plural(entry.run.files_written.length, 'file')}`,
-    tools: `${plural(entry.run.tool_calls.length, 'tool call')}`,
+    tools: `${entry.run.tool_calls.length} tools`,
+    spend: money(entry.run.cost?.usd),
   }));
-  const width = (key: 'when' | 'agent' | 'intent' | 'touched') => Math.max(...rows.map((row) => row[key].length));
+  const width = (key: 'when' | 'agent' | 'intent' | 'touched' | 'tools') =>
+    Math.max(...rows.map((row) => row[key].length));
   const body = rows.map(
     (row) =>
       `  ${s.bold(row.id)}  ${s.dim(pad(row.when, width('when')))}  ${pad(row.agent, width('agent'))}  ${pad(
         row.intent,
         width('intent'),
-      )}  ${s.dim(`${pad(row.touched, width('touched'))}  ${row.tools}`)}`,
+      )}  ${s.dim(`${pad(row.touched, width('touched'))}  ${pad(row.tools, width('tools'))}`)}  ${pad(row.spend, 8)}`,
   );
   return lines(
     `${s.bold(PRODUCT_NAME)}  ${s.dim(report.repo.root)}`,
@@ -130,7 +133,17 @@ export function formatShow(entry: LedgerRun, s: Style): string {
     `  intent   ${run.task.intent ?? s.dim('not recorded')}`,
     `  where    ${where} @ ${head}`,
     `  tools    ${run.tool_calls.length === 0 ? s.dim('none') : `${run.tool_calls.length}  ${s.dim(tools)}`}`,
+    `  model    ${run.model === null ? s.dim('not recorded') : `${run.model.name}  ${s.dim(run.model.provider)}`}`,
   ];
+  if (run.cost !== undefined) {
+    const { cost } = run;
+    const cached = (cost.cache_write_tokens ?? 0) + (cost.cache_read_tokens ?? 0);
+    const tokens = `${tokenCount(cost.input_tokens)} in, ${tokenCount(cost.output_tokens)} out${
+      cached > 0 ? `, ${tokenCount(cached)} cached` : ''
+    }`;
+    const note = cost.usd === null ? s.dim('  (no rate for this model)') : cost.source === 'harness' ? s.dim('  (agent-reported)') : '';
+    rows.push(`  spent    ${money(cost.usd)}  ${s.dim(tokens)}${note}`);
+  }
   if (run.files_written.length > 0) {
     rows.push('', `  ${s.bold('wrote')}`);
     for (const file of run.files_written) {
@@ -160,6 +173,54 @@ export function formatSeal(result: SealResult, s: Style): string {
   return lines(
     `Sealed ${plural(result.sealed, 'run')} into ${LEDGER_REF} ${s.dim(`(${short(result.head)})`)}.${rejected}`,
   );
+}
+
+export function formatCost(report: CostReport, s: Style): string {
+  if (!report.initialized) {
+    return lines(`${PRODUCT_NAME} is not set up here: ${report.repo.root}`, `Run ${s.bold(`${CLI_NAME} init`)} to start.`);
+  }
+  if (report.runs === 0) {
+    return lines('No runs in this period, so nothing was spent.');
+  }
+  const { totals } = report;
+  const period = report.days === null ? 'all time' : `last ${plural(report.days, 'day')}`;
+  const cached = totals.cache_write_tokens + totals.cache_read_tokens;
+  const rows = [
+    `${s.bold(`${PRODUCT_NAME} spend`)}  ${s.dim(report.repo.root)}`,
+    '',
+    `  period     ${period}  ${s.dim(`${plural(report.runs, 'run')}${report.unmeasured > 0 ? `, ${report.unmeasured} without usage` : ''}`)}`,
+    `  tokens     ${tokenCount(totals.input_tokens)} in · ${tokenCount(totals.output_tokens)} out${
+      cached > 0 ? ` · ${tokenCount(cached)} cached` : ''
+    }`,
+    `  total      ${s.bold(money(totals.usd))}`,
+  ];
+  if (report.byModel.length > 0) {
+    rows.push('', `  ${s.bold('by model')}`);
+    const width = Math.max(...report.byModel.map((bucket) => bucket.key.length));
+    for (const bucket of report.byModel) {
+      rows.push(
+        `    ${pad(bucket.key, width)}  ${s.dim(pad(plural(bucket.runs, 'run'), 8))}  ${pad(money(bucket.usd), 9)}${
+          bucket.unpriced > 0 ? s.dim(`  ${bucket.unpriced} unpriced`) : ''
+        }`,
+      );
+    }
+  }
+  if (report.byAgent.length > 1) {
+    rows.push('', `  ${s.bold('by agent')}`);
+    const width = Math.max(...report.byAgent.map((bucket) => bucket.key.length));
+    for (const bucket of report.byAgent) {
+      rows.push(`    ${pad(bucket.key, width)}  ${s.dim(pad(plural(bucket.runs, 'run'), 8))}  ${pad(money(bucket.usd), 9)}`);
+    }
+  }
+  if (totals.unpriced > 0) {
+    rows.push(
+      '',
+      s.dim(
+        `${plural(totals.unpriced, 'run')} could not be priced: no rate is known for that model. Add one under "pricing" in ${STATE_DIR}/config.json.`,
+      ),
+    );
+  }
+  return lines(...rows);
 }
 
 export function formatHooks(report: HooksReport, s: Style): string {
@@ -244,6 +305,19 @@ function relativeTo(root: string, files: readonly string[]): string {
 
 function slashes(path: string): string {
   return path.split('\\').join('/');
+}
+
+/** A dash rather than a zero when the model's rate is unknown. */
+function money(usd: number | null | undefined): string {
+  if (usd === null || usd === undefined) return '—';
+  if (usd === 0) return '$0';
+  return usd < 0.01 ? `$${usd.toFixed(4)}` : `$${usd.toFixed(2)}`;
+}
+
+function tokenCount(tokens: number): string {
+  if (tokens < 1000) return String(tokens);
+  if (tokens < 1_000_000) return `${(tokens / 1000).toFixed(1)}k`;
+  return `${(tokens / 1_000_000).toFixed(1)}M`;
 }
 
 function clip(text: string, width: number): string {

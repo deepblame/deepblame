@@ -66,6 +66,26 @@ run 43ac7f2a-4564-43fa-8dfc-8c805b6a4429
     src/retry.ts    1 hunk, new → 1a4b7c2
 ```
 
+Every run also carries what it cost, read from the agent's own session log:
+
+```sh
+npx deepblame cost --days 7
+```
+
+```
+DeepBlame spend  ~/code/app
+
+  period     last 7 days  38 runs
+  tokens     4.2M in · 210.4k out · 18.9M cached
+  total      $84.15
+
+  by model
+    claude-opus-4-5-20260114   31 runs   $79.40
+    claude-haiku-4-5-20251001   7 runs    $4.75
+```
+
+Rates for models we do not know yet are left blank rather than guessed; add your own under `pricing` in `.deepblame/config.json` and the numbers appear.
+
 ## What `init` does, and what it never does
 
 - Creates the ledger as a separate git ref, `refs/deepblame/ledger`. It is never checked out, so your branches, working tree and index stay exactly as they were.
@@ -90,6 +110,7 @@ Running `init` again is safe: it finds the existing ledger and repairs anything 
 | `deepblame status` | Show what is set up and what is being recorded |
 | `deepblame log` | List recorded agent runs, newest first |
 | `deepblame show <run>` | Show one run in full |
+| `deepblame cost` | What the agents spent, by model and by agent |
 | `deepblame seal` | Fold captured events into the ledger now |
 | `deepblame hooks <action>` | `install`, `uninstall` or `status` for capture hooks |
 
@@ -98,7 +119,7 @@ Options: `-C <dir>` runs as if started in another directory, `--limit <n>` bound
 ## Roadmap
 
 1. **Foundation** — ledger, local state, agent detection. *Done.*
-2. **Capture** — Claude Code adapter, queue and sealer. *Done.* OpenCode, Codex and Cursor adapters plus a git fallback that works with any tool: next.
+2. **Capture** — Claude Code adapter, queue, sealer, model and cost accounting. *Done.* OpenCode, Codex and Cursor adapters plus a git fallback that works with any tool: next.
 3. **`deepblame blame --why`** — line-by-line provenance that survives edits, merges and reformatting, with a confidence score.
 4. **`deepblame revert --agent <id>`** — undo one agent's changes, with conflicts shown before anything is applied.
 5. Team dashboard, PR checks and signed audit reports.

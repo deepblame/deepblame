@@ -2,10 +2,11 @@
 
 > **Yeni sohbete başlarken bu dosyayı yükle.** Projenin ne olduğunu, nerede kaldığımızı ve neden bu kararları verdiğimizi anlatır. Mimari doküman "ne yapılacak"ı, bu dosya "ne yapıldı ve neden"i anlatır.
 
-**Son güncelleme:** 26 Eylül 2026
-**Faz:** 0 ✅ · **Faz 1 yarısı ✅** (Claude Code kaydı uçtan uca çalışıyor) → kalan: diğer adaptörler + indeks
-**İsim:** DeepBlame ✅ kesinleşti · **Logo:** ✅ kesinleşti (`brand/`) · **GitHub org `deepblame` ✅ alındı**
-**Kod:** `init`, `status`, `log`, `show`, `seal`, `hooks` çalışıyor; bir ajan turu kaydedilip deftere mühürleniyor. 59 test geçiyor · hedef platformlar: macOS, Linux, Windows
+**Son güncelleme:** 27 Eylül 2026
+**Faz:** 0 ✅ · **Faz 1'in büyük kısmı ✅** (kayıt + maliyet çalışıyor) → kalan: diğer adaptörler + indeks
+**İsim:** DeepBlame ✅ · **Logo:** ✅ (`brand/`) · **GitHub org ✅** · **deepblame.com ✅ alındı** · **npm `deepblame` ✅ yayında (0.1.0)**
+**Canlı:** github.com/deepblame/deepblame (public) · npmjs.com/package/deepblame · `npx deepblame init` dünyanın her yerinden çalışıyor
+**Kod:** `init`, `status`, `log`, `show`, `cost`, `seal`, `hooks`. 68 test geçiyor; CI Windows + macOS + Linux'ta yeşil (gerçek makinelerde doğrulandı).
 
 ---
 
@@ -21,10 +22,10 @@ Birden fazla yapay zekâ ajanının aynı kod tabanında çalıştığı yazıl�
 
 | Varlık | Durum |
 |---|---|
-| `deepblame.com` | ✅ Boş — alınacak |
-| `deepblame.dev` | ✅ Boş — alınacak |
-| npm `deepblame` | ✅ Boş (26 Eylül'de tekrar doğrulandı) |
-| GitHub org `deepblame` | ✅ Alındı (26 Eylül) — repo henüz push edilmedi |
+| `deepblame.com` | ✅ **Alındı** (27 Eylül, Hostinger, 3 yıl, oto-yenileme açık) |
+| `deepblame.dev` | ⬜ Boş — isteğe bağlı |
+| npm `deepblame` | ✅ **Yayında** — 0.1.0, sahibi `yusufozguryilmaz` |
+| GitHub org `deepblame` | ✅ **Alındı**, repo public: github.com/deepblame/deepblame |
 
 **Neden bu isim:** Her geliştirici `git blame`'i bilir. "DeepBlame" duyunca ne olduğunu anında anlıyor — açık kaynak dağıtımında sıfır açıklama gerektiren bir isim büyük avantaj. Ayrıca üç varlığın (com, dev, npm) birden boş olması nadir.
 
@@ -238,14 +239,31 @@ pnpm workspaces. `protocol` ve `core` yayınlanmayan iç paketler: TS kaynağı 
 14. **Blob içerikleri henüz saklanmıyor**, yalnızca oid'ler. Cerrahi geri alma için içerik gerekecek (Faz 3); defter ağacına `blobs/` eklenecek ki git gc silmesin. Kod hiçbir zaman senkronize edilmeyecek, sadece yerelde durur.
 15. **Boş turlar kaydedilmiyor** (araç çağrısı, okuma ve yazma yoksa) — defteri gürültüyle doldurmamak için.
 16. **`log` ve `show` kendiliğinden mühürlüyor** (`--no-seal` ile kapatılır): hook'lar bir sebeple çalışmadıysa bile kayıt kaybolmaz.
+17. **Bilinmeyen modelin fiyatı tahmin edilmiyor.** Maliyet raporunda yanlış bir rakam, rakam olmamasından kötüdür. Kullanıcı kendi fiyatını config'e yazabiliyor.
+18. **Maliyet verisi ajanın kendi oturum kaydından okunuyor**, ayrı bir API çağrısı veya anahtar gerekmiyor. Dolayısıyla maliyet, kaydın olduğu her yerde ücretsiz geliyor.
+19. **npm yayını elle tetikleniyor** (`release.yml`, Actions sekmesinden). Push'a bağlı otomatik yayın yok: yayın bilinçli bir karar olmalı.
+20. **npm'de token ile yayın yapılamıyor.** Hesapta 2FA açıkken npm, granular token'la bile tek kullanımlık kod istiyor (`EOTP`) — "yazma işlemleri için 2FA" ayarını kapatmak bile değiştirmedi. Bugünkü yayın şöyle yapıldı: Claude kendi konteynerinde `npm publish` başlattı, npm bir onay linki üretti, kullanıcı linke tıklayıp geçiş anahtarıyla onayladı, yayın tamamlandı. Kalıcı çözüm: npm **trusted publishing** (OIDC) — paket artık var olduğu için kurulabilir, token gerekmez.
+
+### 27 Eylül — yayına çıkış ve maliyet katmanı
+
+**Yayına çıkış (hepsi tamam):** repo public olarak GitHub'a yüklendi, CI altı işin altısında yeşil (ilk gerçek Windows ve macOS koşusu), `deepblame.com` alındı, npm paketi yayınlandı. `npx deepblame init` temiz bir makinede baştan sona denendi ve çalışıyor.
+
+**Windows'ta çıkan tek gerçek hata:** yol kısaltma fonksiyonu `/` varsayıyordu, Windows `\` kullanıyor; `hooks install` ve `status` kısa yol yerine tam yolu basıyordu. Düzeltildi, artık her platformda test ediliyor (`format.ts`, `relativeTo`).
+
+**Maliyet katmanı (yeni):**
+- `transcript.ts` — Claude Code'un oturum kaydını (JSONL) okur, turun zaman aralığına düşen asistan mesajlarının token kullanımını ve model adını toplar. Mühürleyicide çalışır, sıcak yolda değil. Bozuk satır, eksik dosya, 64 MB üstü dosya: sessizce atlanır.
+- `pricing.ts` — bildiğimiz modellerin fiyat tablosu (en uzun ön ek eşleşmesi). **Bilmediğimiz model için tahmin yürütmez, parayı `null` bırakır.** Repo kendi fiyatını `.deepblame/config.json` → `pricing` altına yazabilir; o her zaman kazanır. Ajanın kendi bildirdiği maliyet varsa (bazı sürümler `costUSD` yazıyor) o tercih edilir.
+- Run kaydına `model` ve `cost` alanları geldi: `input_tokens`, `output_tokens`, `cache_write_tokens`, `cache_read_tokens`, `usd` (null olabilir), `source` (`rates` | `harness`).
+- `deepblame cost [--days N]` — dönem toplamı, token dökümü, modele ve ajana göre kırılım. `log` çıktısına da tur başı maliyet sütunu eklendi.
 
 ### Faz 1'den kalanlar
 
 1. **OpenCode adaptörü** (eklenti API'si doğrulanacak), sonra Codex, sonra git yedek hook'u (`post-commit` → commit'i son run'a bağlar).
-2. **Model ve maliyet:** Claude Code'un transcript dosyası (`transcript_path` kuyrukta saklanıyor) okunup token kullanımı ve model adı run'a yazılacak. Maliyet paneli bunun üstüne kurulacak.
+2. ~~Model ve maliyet~~ ✅ 27 Eylül'de yapıldı.
 3. **SQLite indeks** — `log` şu an her run blob'unu okuyor; yüzlerce run'da yavaşlar.
 4. **Daemon** — hook başına 55 ms'yi 15 ms'nin altına indirmek için.
 5. **Kendi üstümüzde dogfood:** hook'lar bu repoya kuruldu ama Claude Code ayarları oturum başında okuduğu için gerçek kayıt bir sonraki oturumda başlayacak. İlk gerçek run'lar orada görülecek.
+6. **npm trusted publishing** kurulacak; sonra `NPM_TOKEN` gizli değeri ve tokenlar tamamen silinecek (kullanıcı zaten sildi).
 
 **Paralel (kullanıcı):**
 - `deepblame.com` ve `deepblame.dev` alınacak
@@ -262,7 +280,8 @@ pnpm workspaces. `protocol` ve `core` yayınlanmayan iç paketler: TS kaynağı 
 - **Windows henüz gerçek bir makinede çalıştırılmadı.** İlk gerçek doğrulama repo GitHub'a yüklenince CI'da olacak; Windows kuralları şimdilik Linux'ta taklit edilerek test edildi.
 - **Hook gecikmesi 55 ms** — bütçe 15 ms. Kullanıcılar bunu fark eder mi? Daemon'a ne zaman geçmeliyiz? (bkz. 12)
 - **`init` ajan ayar dosyasını değiştiriyor.** Kullanıcılar bunu saygısızlık olarak görür mü, yoksa kolaylık mı? İlk geri bildirimlerde ölçülecek; `--no-hooks` var.
-- Çalışma şekli: Claude kendi bulut çalışma alanında kodu yazıp test ediyor, projeyi zip olarak teslim ediyor. Kullanıcının terminal kurması gerekmiyor. Bu oturumun GitHub'a doğrudan yazma erişimi yok (API repo'ya bağlı olmayan çağrıları reddediyor), o yüzden push kullanıcıda.
+- **Fiyat tablosu eskir.** Model fiyatları değişince `pricing.ts` güncellenmeli; yeni modeller (opus 5 gibi) tabloda yok, kullanıcı config'e yazana kadar maliyet boş görünür. Uzun vadede fiyatları uzaktan çekmek mi gerekir, yoksa sürümle göndermek yeterli mi?
+- Çalışma şekli (27 Eylül itibarıyla): **GitHub artık ana kopya.** Claude bulut konteynerinde kodu yazıp test ediyor, değişen dosyaları sohbete gönderiyor; kullanıcı ya dosyaları Finder'dan yerine koyup GitHub Desktop'tan push ediyor, ya da GitHub'ın web arayüzünden yüklüyor. Bu oturumun GitHub'a doğrudan yazma erişimi yok (proxy repo'ya bağlı olmayan API çağrılarını reddediyor). Terminal gerekmiyor.
 
 ## 18. Bağlam notu
 

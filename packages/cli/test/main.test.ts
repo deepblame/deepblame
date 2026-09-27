@@ -146,6 +146,31 @@ describe('recording through the cli', () => {
     expect(run(['status'], repo).out).toContain('1 run recorded');
   });
 
+  it('reports what the agents spent', () => {
+    const repo = makeRepo({ commits: true });
+    run(['init'], repo);
+    const transcript = join(repo, 'transcript.jsonl');
+    writeFileSync(
+      transcript,
+      `${JSON.stringify({
+        type: 'assistant',
+        timestamp: new Date().toISOString(),
+        message: { role: 'assistant', model: 'claude-opus-4-5-20260114', usage: { input_tokens: 1_000_000, output_tokens: 0 } },
+      })}\n`,
+    );
+    hook(repo, { hook_event_name: 'SessionStart', transcript_path: transcript });
+    hook(repo, { hook_event_name: 'UserPromptSubmit', prompt: 'spend a little' });
+    hook(repo, { hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: {}, tool_response: {} });
+    hook(repo, { hook_event_name: 'Stop' });
+
+    const spend = run(['cost'], repo);
+    expect(spend.code).toBe(0);
+    expect(spend.out).toContain('$15.00');
+    expect(spend.out).toContain('claude-opus-4-5-20260114');
+    expect(run(['log'], repo).out).toContain('$15.00');
+    expect(run(['cost', '--days', 'x'], repo).code).toBe(2);
+  });
+
   it('says so when there is nothing recorded or nothing to seal', () => {
     const repo = makeRepo({ commits: true });
     run(['init'], repo);

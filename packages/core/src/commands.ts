@@ -135,6 +135,109 @@ export function show(cwd: string, id: string, options: ShowOptions = {}): ShowRe
   return { repo, id, entry: findRun(repo, id) };
 }
 
+export interface CostBucket {
+  /** A model name, or an agent id, depending on the grouping. */
+  key: string;
+  runs: number;
+  input_tokens: number;
+  output_tokens: number;
+  usd: number;
+  /** Runs counted here whose model has no known rate. */
+  unpriced: number;
+}
+
+export interface CostReport {
+  repo: Repo;
+  initialized: boolean;
+  /** How far back the report looks; null means the whole ledger. */
+  days: number | null;
+  runs: number;
+  /** Runs with no usage recorded at all, usually from before capture was on. */
+  unmeasured: number;
+  totals: {
+    input_tokens: number;
+    output_tokens: number;
+    cache_write_tokens: number;
+    cache_read_tokens: number;
+    usd: number;
+    unpriced: number;
+  };
+  byModel: CostBucket[];
+  byAgent: CostBucket[];
+}
+
+export interface CostOptions extends CommandOptions {
+  /** Only count runs that started within this many days. */
+  days?: number;
+  seal?: boolean;
+}
+
+/** What the agents spent, from the ledger's own records. */
+export function cost(cwd: string, options: CostOptions = {}): CostReport {
+  const repo = openRepo(cwd);
+  const stateDir = readStateDir(repo.root);
+  const initialized = readLedger(repo).head !== null && stateDir.exists;
+  const empty: CostReport = {
+    repo,
+    initialized,
+    days: options.days ?? null,
+    runs: 0,
+    unmeasured: 0,
+    totals: { input_tokens: 0, output_tokens: 0, cache_write_tokens: 0, cache_read_tokens: 0, usd: 0, unpriced: 0 },
+    byModel: [],
+    byAgent: [],
+  };
+  if (!initialized) return empty;
+  if (options.seal !== false) seal(repo, { now: options.now });
+
+  const now = (options.now ?? new Date()).getTime();
+  const cutoff = options.days === undefined ? null : now - options.days * 86_400_000;
+  const report = { ...empty };
+  const models = new Map<string, CostBucket>();
+  const agents = new Map<string, CostBucket>();
+  const bucket = (into: Map<string, CostBucket>, key: string): CostBucket => {
+    const found = into.get(key);
+    if (found !== undefined) return found;
+    const fresh: CostBucket = { key, runs: 0, input_tokens: 0, output_tokens: 0, usd: 0, unpriced: 0 };
+    into.set(key, fresh);
+    return fresh;
+  };
+
+  for (const { run } of listRuns(repo)) {
+    if (cutoff !== null && Date.parse(run.started_at) < cutoff) continue;
+    report.runs += 1;
+    const spend = run.cost;
+    if (spend === undefined) {
+      report.unmeasured += 1;
+      continue;
+    }
+    report.totals.input_tokens += spend.input_tokens;
+    report.totals.output_tokens += spend.output_tokens;
+    report.totals.cache_write_tokens += spend.cache_write_tokens ?? 0;
+    report.totals.cache_read_tokens += spend.cache_read_tokens ?? 0;
+    if (spend.usd === null) report.totals.unpriced += 1;
+    else report.totals.usd += spend.usd;
+
+    for (const [into, key] of [
+      [models, run.model?.name ?? 'unknown model'],
+      [agents, run.harness.name],
+    ] as const) {
+      const entry = bucket(into, key);
+      entry.runs += 1;
+      entry.input_tokens += spend.input_tokens;
+      entry.output_tokens += spend.output_tokens;
+      if (spend.usd === null) entry.unpriced += 1;
+      else entry.usd += spend.usd;
+    }
+  }
+
+  const bySpend = (a: CostBucket, b: CostBucket): number => b.usd - a.usd || b.runs - a.runs;
+  report.totals.usd = Math.round(report.totals.usd * 1e6) / 1e6;
+  report.byModel = [...models.values()].sort(bySpend);
+  report.byAgent = [...agents.values()].sort(bySpend);
+  return report;
+}
+
 export interface SealReport {
   repo: Repo;
   result: SealResult;

@@ -99,11 +99,19 @@ export const RunSchema = z
         ts: timestamp,
       })
       .optional(),
+    /**
+     * What the turn spent. `usd` is null when no rate is known for the model:
+     * a missing number is honest, a guessed one is not.
+     */
     cost: z
       .strictObject({
         input_tokens: count,
         output_tokens: count,
-        usd: z.number().nonnegative(),
+        cache_write_tokens: count.optional(),
+        cache_read_tokens: count.optional(),
+        usd: z.number().nonnegative().nullable(),
+        /** Priced from a rate table, or taken from the harness's own figure. */
+        source: z.enum(['rates', 'harness']).optional(),
       })
       .optional(),
 

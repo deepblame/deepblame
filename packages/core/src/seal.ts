@@ -19,7 +19,9 @@ import {
 import { GitError, git, tryGit } from './git';
 import { hostId, sessionUuid, worktreeId } from './ids';
 import { createGenesis, readLedger } from './ledger';
+import { priceUsd, readRates, type RateTable } from './pricing';
 import type { Repo } from './repo';
+import { readTranscriptUsage } from './transcript';
 
 /**
  * The cold path. Turns captured events into run records and commits them to
@@ -82,10 +84,12 @@ export function seal(repo: Repo, options: { now?: Date } = {}): SealResult {
     }
 
     const env = runEnv(repo);
+    const transcripts = transcriptsOf(lines);
+    const rates = readRates(repo.root);
     const rejected: string[] = [];
     const records: { id: string; json: string }[] = [];
     for (const segment of closed) {
-      const candidate = runOf(segment, env);
+      const candidate = runOf(segment, env, transcripts.get(sessionKey(segment.agent, segment.session)) ?? null, rates);
       if (candidate === null) continue;
       const parsed = parseRun(candidate);
       if (!parsed.ok) {
@@ -199,8 +203,26 @@ function runEnv(repo: Repo): RunEnv {
   };
 }
 
+function sessionKey(agent: string, session: string): string {
+  return `${agent}\u0000${session}`;
+}
+
+/**
+ * Where each session keeps its conversation log. The harness reports it once,
+ * at the start, but every turn of that session needs it to price itself.
+ */
+function transcriptsOf(lines: readonly QueueLine[]): Map<string, string> {
+  const paths = new Map<string, string>();
+  for (const { event } of lines) {
+    if (event.k === 'session' && event.transcript !== null) {
+      paths.set(sessionKey(event.agent, event.session), event.transcript);
+    }
+  }
+  return paths;
+}
+
 /** Null for a turn that touched nothing: a ledger entry for it would be noise. */
-function runOf(segment: Segment, env: RunEnv): Run | null {
+function runOf(segment: Segment, env: RunEnv, transcript: string | null, rates: RateTable): Run | null {
   const events = segment.lines.map((line) => line.event);
   const first = events[0];
   const last = events[events.length - 1];
@@ -224,27 +246,53 @@ function runOf(segment: Segment, env: RunEnv): Run | null {
   const writes = collectWrites(events);
   if (toolCalls.length === 0 && writes.length === 0 && reads.size === 0) return null;
 
+  const startedAt = (prompt ?? first).ts;
+  const endedAt = (end ?? last).ts;
+  const usage = transcript === null ? null : readTranscriptUsage(transcript, startedAt, endedAt);
+  const price = usage === null ? null : priceUsd(usage, rates);
+
   const run: Run = {
     schema_version: SCHEMA_VERSION,
     run_id: randomUUID(),
     session_id: sessionUuid(segment.agent, segment.session),
     parent_run_id: null,
     harness: { name: segment.agent, version: null },
-    model: null,
+    model: usage?.model == null ? null : { provider: providerOf(usage.model), name: usage.model, version: null },
     actor: { type: 'agent', id: segment.agent },
     task: {
       prompt_sha256: prompt?.k === 'prompt' ? prompt.sha256 : null,
       ...(prompt?.k === 'prompt' && prompt.text !== undefined ? { prompt_text: prompt.text } : {}),
       ...(prompt?.k === 'prompt' && prompt.intent !== null ? { intent: prompt.intent } : {}),
     },
-    started_at: (prompt ?? first).ts,
-    ended_at: (end ?? last).ts,
+    started_at: startedAt,
+    ended_at: endedAt,
     tool_calls: toolCalls,
     files_read: [...reads].map((path) => ({ path, blob_sha: null })),
     files_written: writes,
+    ...(usage === null || price === null
+      ? {}
+      : {
+          cost: {
+            input_tokens: usage.input_tokens,
+            output_tokens: usage.output_tokens,
+            ...(usage.cache_write_tokens > 0 ? { cache_write_tokens: usage.cache_write_tokens } : {}),
+            ...(usage.cache_read_tokens > 0 ? { cache_read_tokens: usage.cache_read_tokens } : {}),
+            usd: price.usd,
+            source: price.source,
+          },
+        }),
     env: { branch: env.branch, head_commit: env.head, worktree_id: env.worktree, host_id: env.host },
   };
   return run;
+}
+
+/** Enough to tell whose bill it is; the exact vendor list is not our business. */
+function providerOf(model: string): string {
+  if (model.startsWith('claude')) return 'anthropic';
+  if (model.startsWith('gpt') || model.startsWith('o1') || model.startsWith('o3') || model.startsWith('o4')) return 'openai';
+  if (model.startsWith('gemini')) return 'google';
+  if (model.startsWith('grok')) return 'xai';
+  return 'unknown';
 }
 
 interface WriteState {
