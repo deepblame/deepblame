@@ -336,6 +336,144 @@ export function captureEvent(payload: unknown, context: CaptureContext, now: Dat
   }
 }
 
+/**
+ * Cursor's own hook payloads.
+ *
+ * Cursor reports as much as Claude Code does, through `.cursor/hooks.json`.
+ * The one thing it has no hook for is the moment *before* an edit, so there is
+ * nowhere to snapshot the old file. It does not need one: `afterFileEdit`
+ * hands over the exact strings that were replaced, so the state before the
+ * edit is the file as it stands now with those replacements undone. That is
+ * reconstruction from what the harness told us, not a guess.
+ *
+ * Field names are Cursor's own: conversation_id, hook_event_name, file_path,
+ * edits[].old_string / new_string, prompt, model, transcript_path.
+ */
+export function captureCursor(payload: unknown, context: CaptureContext, now: Date): CaptureResult {
+  const none: CaptureResult = { events: [], seal: false };
+  if (!isRecord(payload)) return none;
+  const session = asString(payload['conversation_id']) ?? asString(payload['session_id']);
+  if (session === null) return none;
+  const base = { v: 1 as const, ts: now.toISOString(), agent: 'cursor' as HarnessId, session };
+
+  switch (asString(payload['hook_event_name'])) {
+    case 'sessionStart':
+      return {
+        events: [
+          {
+            ...base,
+            k: 'session',
+            cwd: workspaceRoot(payload) ?? context.root,
+            source: asString(payload['cursor_version']),
+            transcript: asString(payload['transcript_path']),
+          },
+        ],
+        seal: false,
+      };
+
+    case 'beforeSubmitPrompt': {
+      const prompt = asString(payload['prompt']);
+      if (prompt === null) return none;
+      const event: QueueEvent = {
+        ...base,
+        k: 'prompt',
+        sha256: sha256(prompt),
+        intent: context.intent ? intentOf(prompt) : null,
+      };
+      if (context.promptText) event.text = prompt;
+      return { events: [event], seal: false };
+    }
+
+    case 'beforeReadFile':
+    case 'beforeTabFileRead': {
+      const path = repoPath(context.root, filePathOf(payload));
+      return path === null ? none : { events: [{ ...base, k: 'read', path }], seal: false };
+    }
+
+    case 'afterFileEdit':
+    case 'afterTabFileEdit': {
+      const path = repoPath(context.root, filePathOf(payload));
+      if (path === null) return none;
+      const edits = cursorEdits(payload['edits']);
+      const after = hashFile(context, join(context.root, path));
+      const before = after.text === null ? null : undoEdits(after.text, edits);
+      const preBlob = before === null ? null : keepText(context, before);
+      return {
+        events: [
+          { ...base, k: 'write-pre', path, blob: preBlob, lines: before === null ? 0 : countLines(before) },
+          {
+            ...base,
+            k: 'write',
+            path,
+            tool: 'MultiEdit',
+            blob: after.blob,
+            lines: after.lines,
+            hunks: after.text === null ? [] : hunksOf('MultiEdit', { edits }, after.text),
+          },
+        ],
+        seal: false,
+      };
+    }
+
+    case 'stop':
+    case 'sessionEnd':
+    case 'subagentStop':
+      return {
+        events: [{ ...base, k: 'end', reason: asString(payload['status']) ?? asString(payload['reason']) ?? 'stop' }],
+        seal: true,
+      };
+
+    default:
+      return none;
+  }
+}
+
+/** Cursor's edits, in the shape our hunk builder already reads. */
+function cursorEdits(value: unknown): { old_string: string; new_string: string }[] {
+  if (!Array.isArray(value)) return [];
+  const edits: { old_string: string; new_string: string }[] = [];
+  for (const entry of value) {
+    if (!isRecord(entry)) continue;
+    const before = asString(entry['old_string']) ?? asString(entry['old_line']);
+    const after = asString(entry['new_string']) ?? asString(entry['new_line']);
+    if (before === null || after === null) continue;
+    edits.push({ old_string: before, new_string: after });
+  }
+  return edits;
+}
+
+/** The file as it was before these edits: the replacements, put back. */
+function undoEdits(after: string, edits: readonly { old_string: string; new_string: string }[]): string | null {
+  if (edits.length === 0) return null;
+  let text = after;
+  // Last edit first: an earlier edit's result is what the next one saw.
+  for (let at = edits.length - 1; at >= 0; at -= 1) {
+    const edit = edits[at];
+    if (edit === undefined) continue;
+    if (edit.new_string === '') return null; // A pure deletion cannot be located.
+    const found = text.lastIndexOf(edit.new_string);
+    if (found < 0) return null; // Not where we were told; do not invent a pre-image.
+    text = text.slice(0, found) + edit.old_string + text.slice(found + edit.new_string.length);
+  }
+  return text;
+}
+
+/** Parks text we reconstructed, so blame and revert have it later. */
+function keepText(context: CaptureContext, text: string): string {
+  const content = Buffer.from(text, 'utf8');
+  const blob = gitBlobOid(content, context.objectFormat);
+  if (context.keepContent) park(context, blob, content);
+  return blob;
+}
+
+/** Cursor passes the workspace as an array; one root is the normal case. */
+function workspaceRoot(payload: Record<string, unknown>): string | null {
+  const roots = payload['workspace_roots'];
+  if (!Array.isArray(roots)) return null;
+  const first = roots.find((entry) => typeof entry === 'string' && entry !== '');
+  return typeof first === 'string' ? first : null;
+}
+
 function asCount(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.round(value) : 0;
 }

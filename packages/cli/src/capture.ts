@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { appendEvents, captureClaudeCode, captureEvent, openCapture } from '@deepblame/core/capture';
+import { appendEvents, captureClaudeCode, captureCursor, captureEvent, openCapture } from '@deepblame/core/capture';
 
 /**
  * The hook entry point. It runs on every agent tool call, so it loads only
@@ -25,15 +25,20 @@ export interface CaptureIo {
 export function capture(argv: readonly string[], io: CaptureIo): number {
   try {
     const payload = parseJson((io.stdin ?? readStdin)());
-    const cwd = fieldString(payload, 'cwd') ?? flag(argv, '-C') ?? flag(argv, '--cwd') ?? io.cwd;
+    const cwd = fieldString(payload, 'cwd') ?? workspaceRoot(payload) ?? flag(argv, '-C') ?? flag(argv, '--cwd') ?? io.cwd;
     const context = openCapture(cwd);
     if (context === null) return 0;
-    // Claude Code sends its own hook payload; everything else sends the plain
-    // shape any tool can produce. Which one it is, the payload itself says.
+    // Claude Code and Cursor both send a field called hook_event_name, so the
+    // installed command names its own harness; anything else sends the plain
+    // shape any tool can produce.
+    const agent = flag(argv, '--agent');
+    const now = new Date();
     const result =
-      fieldString(payload, 'hook_event_name') !== null
-        ? captureClaudeCode(payload, context, new Date())
-        : captureEvent(withAgent(payload, flag(argv, '--agent')), context, new Date());
+      agent === 'cursor'
+        ? captureCursor(payload, context, now)
+        : fieldString(payload, 'hook_event_name') !== null
+          ? captureClaudeCode(payload, context, now)
+          : captureEvent(withAgent(payload, agent), context, now);
     appendEvents(context, result.events);
     if (result.seal) sealInBackground(io, context.root);
   } catch {
@@ -81,6 +86,15 @@ function parseJson(text: string | null): unknown {
   } catch {
     return null;
   }
+}
+
+/** Cursor names the project this way instead of sending a cwd. */
+function workspaceRoot(payload: unknown): string | null {
+  if (typeof payload !== 'object' || payload === null) return null;
+  const roots = (payload as Record<string, unknown>)['workspace_roots'];
+  if (!Array.isArray(roots)) return null;
+  const first = roots.find((entry) => typeof entry === 'string' && entry !== '');
+  return typeof first === 'string' ? first : null;
 }
 
 function fieldString(payload: unknown, key: string): string | null {

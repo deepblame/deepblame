@@ -18,7 +18,7 @@ DeepBlame records every agent turn into a ledger that lives beside your code, an
 - **What it cost** — tokens and money, per turn, per model, per agent.
 - **Undo just that** — surgical revert of one agent's work, without touching the rest.
 
-**It works with the tools you already use.** Claude Code and OpenCode are recorded tool call by tool call; Codex turn by turn through its own notifier; everything else — Cursor, Copilot, Windsurf, a cloud agent that opens a pull request — at commit level, and anything at all can report to us with [one JSON line](#wiring-up-a-tool-we-have-not-heard-of). One ledger for all of them, because a team runs more than one agent and no vendor's own history covers the others.
+**It works with the tools you already use.** Claude Code, Cursor and OpenCode are recorded tool call by tool call; Codex turn by turn through its own notifier; everything else — Copilot, Windsurf, a cloud agent that opens a pull request — at commit level, and anything at all can report to us with [one JSON line](#wiring-up-a-tool-we-have-not-heard-of). One ledger for all of them, because a team runs more than one agent and no vendor's own history covers the others.
 
 **Nothing leaves your machine.** The ledger is a separate git ref: your branches, working tree and index are never touched, no code is sent anywhere, and prompts are stored as hashes unless you ask otherwise.
 
@@ -171,9 +171,10 @@ Running `init` again is safe: it finds the existing ledger and repairs anything 
 | Tool | How | What you get |
 | --- | --- | --- |
 | **Claude Code** | its own hooks, installed by `init` | every prompt, tool call and edit, with model and cost |
+| **Cursor** | its own hooks, installed by `init` | every prompt, read and edit, with the exact strings it replaced |
 | **OpenCode** | a plugin, installed by `init` | every prompt, tool call and edit, with the tokens and price OpenCode itself reports |
 | **Codex** | `hooks install --agent codex`, then one line in your Codex config | one run per turn, with the files it changed |
-| **Anything else** — Cursor, Copilot, Windsurf, a cloud agent | `hooks install --agent git` | one run per commit, with the lines it changed |
+| **Anything else** — Copilot, Windsurf, a cloud agent | `hooks install --agent git` | one run per commit, with the lines it changed |
 
 The fallbacks are coarser on purpose, and they say so: a commit knows the person who made it, never the tool that typed it. When a hooked agent and a commit both touch a line, the agent we actually watched keeps the credit.
 
@@ -192,6 +193,43 @@ echo '{"kind":"end","agent":"opencode","session":"s1"}'                         
 
 `kind` is one of `session`, `prompt`, `read`, `write-pre`, `write`, `tool`, `usage`, `end`. `write-pre` before the edit and `write` after it are what make line-level blame and surgical revert possible; everything else is optional. Anything unrecognised is ignored rather than rejected. Our own OpenCode plugin is forty lines on top of this, and it is written into your project where you can read it.
 
+## When it is not recording
+
+The first question anybody asks, and usually the answer is dull: the agent has not run since the hooks went in, or the agent you use is not the one that got hooked up. So the tool accounts for its own silence.
+
+```sh
+npx deepblame doctor
+```
+
+```
+DeepBlame check  ~/code/app
+
+  ✓ repository   main @ bc05abd
+  ✓ ledger       38 runs, last one 4 minutes ago
+  ✓ state        .deepblame/ present
+  ✓ recording    Claude Code
+  ! agents       Cursor is used here but not hooked up
+                 → deepblame hooks install --agent cursor
+  ! queue        6 events waiting, untouched for 8 hours
+                 → the turn never ended; deepblame seal folds them in anyway
+
+2 things to look at, listed above.
+```
+
+Every check ends in something to do. It exits non-zero only when something is actually broken, so it is safe in CI.
+
+## Keeping the ledger from growing
+
+The ledger stores the contents of every file an agent touched, because that is the only way to prove a line is still the line an agent wrote, and the only way to put it back. It is also the only part that grows without limit.
+
+```sh
+npx deepblame gc --days 90
+```
+
+Contents older than the cutoff are released; every run record is kept. After it, `blame` still names the agent on those older lines but reports them as unverifiable rather than guessing, and `revert` no longer reaches that far back.
+
+One thing it has to say out loud: releasing a blob for real means the ledger's commit chain is replaced by a single commit, because an append-only history keeps every old tree — and every blob in it — reachable forever. The run records all survive. The seal-by-seal history of the ledger itself does not. Nothing is written without `--apply`.
+
 ## How recording works
 
 1. A hook calls `deepblame-capture` on every prompt, tool call and edit. It is a 10 KB bundle that appends one line to `.deepblame/queue.ndjson` and exits: no git process, no schema library, no network.
@@ -209,6 +247,8 @@ echo '{"kind":"end","agent":"opencode","session":"s1"}'                         
 | `deepblame blame <file>` | Which agent wrote each line, with a confidence you can check |
 | `deepblame cost` | What the agents spent, by model and by agent |
 | `deepblame revert` | Undo one agent's work and nobody else's |
+| `deepblame doctor` | Check that recording is actually working, and say what to fix |
+| `deepblame gc` | Age old file contents out of the ledger |
 | `deepblame seal` | Fold captured events into the ledger now |
 | `deepblame hooks <action>` | `install`, `uninstall` or `status` for capture hooks |
 
@@ -217,10 +257,11 @@ Options: `-C <dir>` runs as if started in another directory, `--limit <n>` bound
 ## Roadmap
 
 1. **Foundation** — ledger, local state, agent detection. *Done.*
-2. **Capture** — full adapters for Claude Code and OpenCode, a turn-level one for Codex, a git fallback that covers everything else, and a documented JSON format any other tool can use. Model and cost accounting, from the agent's own figures where it has them. *Done.*
+2. **Capture** — full adapters for Claude Code, Cursor and OpenCode, a turn-level one for Codex, a git fallback that covers everything else, and a documented JSON format any other tool can use. Model and cost accounting, from the agent's own figures where it has them. *Done.*
 3. **`deepblame blame`** — line-by-line provenance with a confidence score you can check. *Done.* It survives edits elsewhere in the file, follows a file through renames, keeps the line when a formatter reindents the whole file (at a lower confidence, and it says so), and keeps the right owner when several agents and a person touch one file.
 4. **`deepblame revert`** — undo one agent's work and nobody else's, three-way against the lines the ledger says were theirs, with conflicts shown before anything is written. *Done.*
-5. **Next**: a team ledger — pushing runs to a shared remote, PR checks that say which agent wrote a diff, and signed audit reports.
+5. **Housekeeping** — `doctor` accounts for the tool's own silence, `gc` keeps the ledger from growing forever. *Done.*
+6. **Next**: a team ledger — pushing runs to a shared remote, PR checks that say which agent wrote a diff, and signed audit reports.
 
 ## Development
 

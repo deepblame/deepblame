@@ -6,6 +6,7 @@ export { commandOnPath, detectHarnesses, type HarnessDetection } from './detect'
 export {
   appendEvents,
   captureClaudeCode,
+  captureCursor,
   captureEvent,
   findRepoRoot,
   gitBlobOid,
@@ -66,10 +67,19 @@ export {
   type DiffOptions,
   type Hunk,
 } from './diffmap';
+export { diagnose, type Check, type CheckStatus, type DoctorOptions, type DoctorReport } from './doctor';
+export { collect, type GcOptions, type GcPlan } from './gc';
 export { runFromCommit } from './gitrun';
 export { appendRuns } from './seal';
 export { markWorktree, recordWorktreeTurn, type TurnOptions } from './worktree';
 export { codexNotifyInstalled, installCodexNotify, uninstallCodexNotify } from './hooks';
+export {
+  CURSOR_HOOKS,
+  cursorHooksInstalled,
+  cursorHooksPath,
+  installCursorHooks,
+  uninstallCursorHooks,
+} from './hooks';
 export {
   OPENCODE_PLUGIN,
   OPENCODE_PLUGIN_DIR,
@@ -81,6 +91,8 @@ export { hostId, sessionUuid, uuidV5, worktreeId } from './ids';
 export {
   blame,
   cost,
+  doctor,
+  gc,
   hooks,
   hooksDirOf,
   init,
@@ -97,6 +109,7 @@ export {
   type CostBucket,
   type CostOptions,
   type CostReport,
+  type GcReport,
   type HookOptions,
   type HookAgent,
   type HooksAction,

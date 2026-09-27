@@ -131,6 +131,83 @@ export function uninstallClaudeCode(root: string, options: HookOptions = {}): Ho
   return { file, installed: false, changed, command: '' };
 }
 
+export const CURSOR_DIR = '.cursor';
+export const CURSOR_HOOKS = 'hooks.json';
+
+/**
+ * Cursor's hooks, which cover the same ground as Claude Code's: the prompt
+ * before it is sent, every file read and edit, and the end of the turn. Its
+ * file is a flat map of event name to a list of commands, so ours is one entry
+ * among whatever else is already there.
+ */
+const CURSOR_POINTS: readonly string[] = [
+  'sessionStart',
+  'beforeSubmitPrompt',
+  'beforeReadFile',
+  'afterFileEdit',
+  'stop',
+];
+
+export function cursorHooksPath(root: string): string {
+  return join(root, CURSOR_DIR, CURSOR_HOOKS);
+}
+
+export function installCursorHooks(root: string, command: string): HookChange {
+  const file = cursorHooksPath(root);
+  const settings = readSettings(file);
+  // Cursor refuses a file without it, and refuses a version it does not know.
+  if (typeof settings['version'] !== 'number') settings['version'] = 1;
+  const hooks = asRecord(settings['hooks']);
+  let changed = !existsSync(file);
+
+  for (const event of CURSOR_POINTS) {
+    const list = asArray(hooks[event]);
+    const ours = list.findIndex((hook) => isOurs(hook));
+    const entry = { command, timeout: TIMEOUT };
+    if (ours < 0) {
+      list.push(entry);
+      changed = true;
+    } else if (asRecord(list[ours])['command'] !== command) {
+      list[ours] = entry;
+      changed = true;
+    }
+    hooks[event] = list;
+  }
+
+  settings['hooks'] = hooks;
+  if (changed) writeSettings(file, settings);
+  return { file, installed: true, changed, command };
+}
+
+export function uninstallCursorHooks(root: string): HookChange {
+  const file = cursorHooksPath(root);
+  if (!existsSync(file)) return { file, installed: false, changed: false, command: '' };
+  const settings = readSettings(file);
+  const hooks = asRecord(settings['hooks']);
+  let changed = false;
+
+  for (const event of Object.keys(hooks)) {
+    const list = asArray(hooks[event]);
+    const kept = list.filter((hook) => !isOurs(hook));
+    if (kept.length !== list.length) changed = true;
+    if (kept.length === 0) delete hooks[event];
+    else hooks[event] = kept;
+  }
+
+  // A file that held nothing but our hooks was ours to begin with.
+  if (Object.keys(hooks).length === 0) {
+    rmSync(file, { force: true });
+    return { file, installed: false, changed: true, command: '' };
+  }
+  settings['hooks'] = hooks;
+  if (changed) writeSettings(file, settings);
+  return { file, installed: false, changed, command: '' };
+}
+
+export function cursorHooksInstalled(root: string): boolean {
+  return fileCallsUs(cursorHooksPath(root));
+}
+
 /**
  * The fallback adapter: a `post-commit` hook, so a tool with no hooks at all
  * is still on the record at commit granularity. Someone else's hook in that
@@ -394,13 +471,17 @@ function shellQuote(value: string): string {
   return `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
+/**
+ * True when this settings file calls our capture command. Handles both shapes
+ * we write: Claude Code nests commands under a matcher group, Cursor lists
+ * them directly against the event.
+ */
 function fileCallsUs(file: string): boolean {
   if (!existsSync(file)) return false;
   try {
-    const settings = readSettings(file);
-    const hooks = asRecord(settings['hooks']);
-    return Object.values(hooks).some((groups) =>
-      asArray(groups).some((group) => asArray(group['hooks']).some((hook) => isOurs(hook))),
+    const hooks = asRecord(readSettings(file)['hooks']);
+    return Object.values(hooks).some((entries) =>
+      asArray(entries).some((entry) => isOurs(entry) || asArray(entry['hooks']).some((hook) => isOurs(hook))),
     );
   } catch {
     return false;

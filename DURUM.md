@@ -343,6 +343,37 @@ Dördü de bitti. Ürünün vaat ettiği her şey artık kodda.
 9. **Defter budama politikası** — dosya içerikleri defterde duruyor; git sıkıştırıp tekilleştiriyor ama uzun vadede eski blob'ları atma kuralı gerekecek.
 10. **Sıradaki büyük iş: takım defteri** — run'ları paylaşılan bir uzak depoya göndermek, PR kontrolü ("bu diff'i hangi ajan yazdı"), imzalı denetim raporu.
 
+### 27 Eylül (geç saat) — Cursor, doctor, gc
+
+**Cursor adaptörü — tahminle değil, doğrulanmış.** Cursor 1.7 ile tam bir hook API'si geldi; `cursor.com/docs/hooks` üzerinden alan adlarını doğruladık.
+- Dosya: `.cursor/hooks.json`, `{ "version": 1, "hooks": { "<olay>": [{ "command": ... }] } }`. Bizimki oradaki listeye bir giriş olarak ekleniyor, başkasının hook'una dokunulmuyor, kaldırırken sadece bizimki siliniyor.
+- Bağlandığımız olaylar: `sessionStart`, `beforeSubmitPrompt` (istem), `beforeReadFile` (okuma), `afterFileEdit` (düzenleme), `stop` (tur sonu).
+- **Cursor'da düzenlemeden *önce* çalışan bir hook yok**, yani dosyanın eski hâlini anlık yakalayamıyoruz. Gerek de yok: `afterFileEdit` değiştirilen metni birebir veriyor (`edits[].old_string` / `new_string`), biz de dosyanın bugünkü hâlinden o değişiklikleri geri alarak eski hâli **yeniden kuruyoruz.** Tahmin değil, harness'in bize söylediğinden hesap. Metin beklenen yerde bulunamazsa uydurmuyor, `pre_blob` boş bırakılıyor.
+- Payload'da `conversation_id` (oturum), `model`, `transcript_path`, `workspace_roots` var — hepsi kullanılıyor.
+- `init` Cursor'u tespit ederse hook'ları kendisi kuruyor. 11 test.
+
+**`deepblame doctor` — "neden kayıt tutmuyor" sorusunun cevabı.** Bu sorunun birinci destek konusu olacağı belli; aracın kendi sessizliğinin hesabını verebilmesi lazım. Kontroller: depo, defter (kaç run, sonuncusu ne zaman), durum dizini, hangi adaptörler kurulu, **projede kullanılan ama bağlanmamış ajan** (gerçekte en sık sorun bu), kuyrukta takılı olaylar, ölü kalmış mühürleme kilidi, ve son 40 run'ın kaydettiği içeriğin hâlâ durup durmadığı. Her satır ne yapılacağını da yazıyor. Gerçekten bozuk bir şey varsa çıkış kodu 1, yani CI'da kullanılabilir.
+
+**`deepblame gc` — defterin sonsuza kadar büyümesini engelliyor.** Belirtilen süreden eski run'ların **içerikleri** bırakılıyor, **kayıtları** duruyor. Sonrasında `blame` o satırlarda ajanı hâlâ söylüyor ama "kanıtsız" diye işaretliyor, `revert` o kadar geriye gidemiyor.
+
+Burada yazarken bir şey keşfettim ve tasarımı değiştirdim: **blob'u en yeni ağaçtan çıkarmak yetmiyor.** Defter append-only olduğu için her eski commit'in ağacı o blob'u işaret etmeye devam ediyor, git de asla toplamıyor. İlk yazdığım gc hiçbir yer boşaltmıyordu. Gerçekten bırakmak için defterin commit zincirinin **tek bir commit'e sıkıştırılması** gerekiyor. Bedeli açıkça söyleniyor: bütün run kayıtları korunuyor, defterin mühür-mühür geçmişi korunmuyor. `--apply` olmadan hiçbir şey yazılmıyor.
+
+**Testler:** 146. `pnpm smoke` geçiyor.
+
+### Ürünün bugünkü şekli
+
+Arayüz terminal, başka arayüz yok. Kurulum bir kere (`npx deepblame init`), sonra unutuluyor. Sorular çıktığında dört komut: `blame`, `cost`, `revert`, `doctor`.
+
+**Ücretsiz / ücretli çizgisi (karar 25):** kendi makinende çalışan her şey ücretsiz ve açık kaynak — bütün komutlar, bütün adaptörler, sınırsız. Ücretli olan tek şey **paylaşım**: takım defteri, web paneli, PR kontrolü, imzalı denetim raporu, SSO. Tek geliştirici paylaşıma ihtiyaç duymaz, şirket duyar; ödeyecek olan da şirket.
+
+### Kalan eksikler (öncelik sırasıyla)
+
+1. **Sıfır dış kullanıcı.** En büyük eksik bir özellik değil. Başkasının makinesinde ne kırılıyor bilmiyoruz. Önce 10 gerçek kullanıcı, bir hafta onların takıldığı yerler.
+2. **VS Code eklentisi** — "komut yaz" yüksek eşik; editörde satırın yanında görünmesi CLI'dan sonraki en büyük benimseme kaldıracı.
+3. **Takım katmanı** — yukarıdaki ücretli kısım, hiç yok.
+4. Kendi üstümüzde gerçek dogfood.
+5. npm trusted publishing (yayın hâlâ elle).
+
 ## 17. Açık sorular
 
 - **Claude Code hook şeması kendi bilgimizden yazıldı** (dokümantasyona erişilemedi: alan adı izin istedi, kullanıcı reddetti). Alan adları (`hook_event_name`, `tool_name`, `tool_input.file_path`, `old_string`/`new_string`, `session_id`) doğru biliniyor ama **gerçek bir Claude Code oturumunda henüz doğrulanmadı.** İlk dogfood turunda kontrol edilecek; yanlış alan varsa `capture.ts` içinde tek yerde düzelir.

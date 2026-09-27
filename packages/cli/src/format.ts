@@ -1,4 +1,3 @@
-import { sep } from 'node:path';
 import { CLI_NAME, LEDGER_REF, PRODUCT_NAME, STATE_DIR } from '@deepblame/protocol';
 import { OPENCODE_PLUGIN } from '@deepblame/core';
 import type {
@@ -9,6 +8,9 @@ import type {
   HooksReport,
   InitResult,
   LedgerRun,
+  Check,
+  DoctorReport,
+  GcReport,
   LogReport,
   RevertReport,
   SealResult,
@@ -432,19 +434,95 @@ function selectionOf(report: RevertReport): string {
   return parts.join(' ');
 }
 
+export function formatDoctor(report: DoctorReport, s: Style): string {
+  const width = Math.max(...report.checks.map((check) => check.name.length));
+  const rows = [`${s.bold(`${PRODUCT_NAME} check`)}  ${s.dim(report.repo.root)}`, ''];
+
+  for (const check of report.checks) {
+    rows.push(`  ${sign(check, s)} ${pad(check.name, width)}   ${check.detail}`);
+    if (check.fix === null) continue;
+    for (const line of check.fix.split('\n')) {
+      rows.push(`  ${' '.repeat(width + 4)} ${s.dim(`→ ${line}`)}`);
+    }
+  }
+
+  rows.push('');
+  rows.push(
+    report.problems === 0
+      ? `${s.green('Everything checks out.')} Recording is on and the ledger is intact.`
+      : `${plural(report.problems, 'thing')} to look at, listed above.`,
+  );
+  return lines(...rows);
+}
+
+function sign(check: Check, s: Style): string {
+  if (check.status === 'ok') return s.green('✓');
+  return check.status === 'fail' ? '✗' : '!';
+}
+
+export function formatGc(report: GcReport, s: Style): string {
+  if (!report.initialized) {
+    return lines(`${PRODUCT_NAME} is not set up here: ${report.repo.root}`, `Run ${s.bold(`${CLI_NAME} init`)} to start.`);
+  }
+  const { plan } = report;
+  const cutoff = plan.before.slice(0, 10);
+
+  if (plan.runs === 0) {
+    return lines(
+      `Nothing to drop: every run is newer than ${cutoff}.`,
+      s.dim(plan.kept === 1 ? '1 run keeps its stored contents.' : `All ${plan.kept} runs keep their stored contents.`),
+    );
+  }
+  if (plan.blobs === 0) {
+    return lines(
+      `Nothing to drop: the ${plural(plan.runs, 'run')} older than ${cutoff} share their contents with newer ones.`,
+    );
+  }
+
+  const rows = [
+    `${s.bold(`${plan.applied ? 'Released' : 'Would release'} the stored contents of ${plural(plan.runs, 'run')}`)}  ${s.dim(`older than ${cutoff}`)}`,
+    '',
+    `  contents   ${plural(plan.blobs, 'file state')}, ${bytes(plan.bytes)}`,
+    `  records    ${s.green('kept')}  ${s.dim('who, when, why, which files, what it cost')}`,
+    `  keeping    ${plural(plan.kept, 'run')} with their contents intact`,
+    '',
+  ];
+
+  rows.push(
+    `  history    ${plural(plan.history, 'ledger commit')} replaced by one`,
+    s.dim('             an append-only history keeps every old tree, and every blob in it'),
+    '',
+  );
+
+  if (plan.applied) {
+    rows.push(
+      `The ledger is compacted. ${bytes(plan.bytes)} of file contents are no longer held.`,
+      s.dim('Nothing is deleted here: git owns its object store. Run git gc to reclaim the space.'),
+      s.dim('blame now reports those older lines as unverifiable rather than guessing, and revert can no longer undo them.'),
+    );
+  } else {
+    rows.push(
+      s.bold('Nothing has been written.'),
+      `Add ${s.bold('--apply')} to compact the ledger.`,
+      s.dim('Every run record survives either way. What goes is the ability to revert those runs, and the seal-by-seal history of the ledger itself.'),
+    );
+  }
+  return lines(...rows);
+}
+
+function bytes(count: number): string {
+  if (count < 1024) return `${count} B`;
+  if (count < 1024 * 1024) return `${(count / 1024).toFixed(0)} KB`;
+  return `${(count / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 export function formatHooks(report: HooksReport, s: Style): string {
   const installed = report.files.filter((file) => file.installed);
   if (report.action === 'install') {
     const rows: string[] = [];
     for (const change of report.changes) {
       const where = relativeTo(report.repo.root, [change.file]);
-      const what = change.file.endsWith('post-commit')
-        ? 'Every commit is now recorded, whichever tool wrote it'
-        : change.file.endsWith('codex-notify.sh')
-          ? 'Codex can now report each finished turn'
-          : change.file.endsWith(`${sep}${OPENCODE_PLUGIN}`) || change.file.endsWith(`/${OPENCODE_PLUGIN}`)
-            ? 'OpenCode now reports every prompt, tool call, edit and what it spent'
-            : 'Claude Code now reports every prompt, tool call and edit';
+      const what = whatChanged(change.file);
       rows.push(
         change.changed
           ? `${s.green('✓')} ${what}: ${s.bold(where)}`
@@ -477,6 +555,16 @@ export function formatHooks(report: HooksReport, s: Style): string {
     )}`,
     `  agents   ${agents(report.harnesses)}`,
   );
+}
+
+/** Says what a settings file now does, in the words of the tool it belongs to. */
+function whatChanged(file: string): string {
+  const path = slashes(file);
+  if (path.endsWith('post-commit')) return 'Every commit is now recorded, whichever tool wrote it';
+  if (path.endsWith('codex-notify.sh')) return 'Codex can now report each finished turn';
+  if (path.endsWith(`/${OPENCODE_PLUGIN}`)) return 'OpenCode now reports every prompt, tool call, edit and what it spent';
+  if (path.includes('/.cursor/')) return 'Cursor now reports every prompt, read and edit';
+  return 'Claude Code now reports every prompt, tool call and edit';
 }
 
 function agents(list: readonly HarnessDetection[]): string {

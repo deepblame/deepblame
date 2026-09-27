@@ -8,6 +8,8 @@ import {
   blame,
   commandOnPath,
   cost,
+  doctor,
+  gc,
   hooks,
   init,
   log,
@@ -26,6 +28,8 @@ import {
   formatBlame,
   formatBlameLine,
   formatCost,
+  formatDoctor,
+  formatGc,
   formatHooks,
   formatInit,
   formatLog,
@@ -63,9 +67,12 @@ Usage
   ${CLI_NAME} blame <file>     which agent wrote each line, and how sure we are
   ${CLI_NAME} cost             what the agents spent, by model and agent
   ${CLI_NAME} revert           undo one agent's work and nobody else's
+  ${CLI_NAME} doctor           check that recording is actually working
+  ${CLI_NAME} gc               age old file contents out of the ledger
   ${CLI_NAME} seal             fold captured events into the ledger now
   ${CLI_NAME} hooks <action>   install, uninstall or check capture hooks
-                   ${' '.repeat(CLI_NAME.length)}   --agent claude-code | opencode | codex | git | all
+                   ${' '.repeat(CLI_NAME.length)}   --agent claude-code | opencode | cursor |
+                   ${' '.repeat(CLI_NAME.length)}           codex | git | all
                    ${' '.repeat(CLI_NAME.length)}   git records every commit, which covers
                    ${' '.repeat(CLI_NAME.length)}   the tools that have no hooks of their own
 
@@ -77,7 +84,7 @@ Options
   --run <id>      which run to revert; repeat for several
   --agent <name>  which agent to revert, or to hook up
   --hours <n>     only revert runs from the last <n> hours
-  --apply         actually write the revert; without it nothing is touched
+  --apply         actually write the revert or the gc; nothing is touched without it
   --conflicts     write conflicted files too, with merge markers
   --local         keep hooks in .claude/settings.local.json, uncommitted
   --no-hooks      set up without touching your agent's settings
@@ -86,8 +93,8 @@ Options
   -h, --help      show this help
   -v, --version   print the version
 
-Recording covers Claude Code and OpenCode in full, Codex turn by turn, and
-every other tool at commit level.
+Recording covers Claude Code, OpenCode and Cursor in full, Codex turn by
+turn, and every other tool at commit level.
 `;
 
 /** Returns the exit code instead of exiting, so it can be tested in-process. */
@@ -162,6 +169,7 @@ export function main(argv: readonly string[], io: Io): number {
         const result = init(cwd, {
           env: io.env,
           hookCommand: hookCommand(io),
+          cursorCommand: cursorCommand(io),
           noHooks: values['no-hooks'] === true,
           local: values.local === true,
         });
@@ -222,6 +230,17 @@ export function main(argv: readonly string[], io: Io): number {
         if (report.plan?.applied === true && report.plan.skipped.length > 0) return EXIT.failure;
         return EXIT.ok;
       }
+      case 'doctor': {
+        const report = doctor(cwd, { env: io.env });
+        io.stdout(values.json ? toJson(report.checks) : formatDoctor(report, style));
+        // A script running this in CI wants to know, not to read.
+        return report.checks.some((check) => check.status === 'fail') ? EXIT.failure : EXIT.ok;
+      }
+      case 'gc': {
+        const report = gc(cwd, { env: io.env, days, apply: values.apply === true });
+        io.stdout(values.json ? toJson(report.plan) : formatGc(report, style));
+        return EXIT.ok;
+      }
       case 'seal': {
         const report = sealNow(cwd, { env: io.env });
         io.stdout(values.json ? toJson(report.result) : formatSeal(report.result, style));
@@ -250,13 +269,14 @@ export function main(argv: readonly string[], io: Io): number {
         if (!isHooksAction(argument)) return usageError(io, `unknown hooks action '${argument}'`);
         const agent = values.agent ?? 'claude-code';
         if (!isHookAgent(agent)) {
-          return usageError(io, `--agent takes claude-code, opencode, codex, git or all`);
+          return usageError(io, `--agent takes claude-code, opencode, cursor, codex, git or all`);
         }
         const report = hooks(cwd, argument, {
           env: io.env,
           hookCommand: hookCommand(io),
           commitCommand: commitCommand(io),
           turnCommand: turnCommand(io),
+          cursorCommand: cursorCommand(io),
           local: values.local === true,
           agent,
         });
@@ -329,7 +349,13 @@ function quote(path: string): string {
 }
 
 function isHookAgent(value: string): value is HookAgent {
-  return value === 'claude-code' || value === 'opencode' || value === 'codex' || value === 'git' || value === 'all';
+  const known = ['claude-code', 'opencode', 'cursor', 'codex', 'git', 'all'];
+  return known.includes(value);
+}
+
+/** Cursor sends its own payload shape, so its hook says whose it is. */
+function cursorCommand(io: Io): string {
+  return `${hookCommand(io)} --agent cursor`;
 }
 
 function isHooksAction(value: string): value is HooksAction {

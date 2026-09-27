@@ -2,6 +2,8 @@ import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { STATE_DIR, type HarnessId, type Run } from '@deepblame/protocol';
 import { FileNotTrackedError, blameFile, type BlameResult, type BlameSpan } from './blame';
 import { detectHarnesses, type HarnessDetection } from './detect';
+import { diagnose, type DoctorReport } from './doctor';
+import { collect, type GcOptions, type GcPlan } from './gc';
 import { tryGit } from './git';
 import { runFromCommit } from './gitrun';
 import {
@@ -9,15 +11,19 @@ import {
   OPENCODE_PLUGIN,
   OPENCODE_PLUGIN_DIR,
   codexNotifyInstalled,
+  cursorHooksInstalled,
+  cursorHooksPath,
   gitHookInstalled,
   hooksInstalled,
   installClaudeCode,
   installCodexNotify,
+  installCursorHooks,
   installGitHook,
   installOpenCodePlugin,
   openCodePluginInstalled,
   uninstallClaudeCode,
   uninstallCodexNotify,
+  uninstallCursorHooks,
   uninstallGitHook,
   uninstallOpenCodePlugin,
   type HookChange,
@@ -49,6 +55,8 @@ export interface HookOptions {
   agent?: HookAgent;
   /** How the Codex notify script should call us. */
   turnCommand?: string;
+  /** How Cursor's hooks should call us; they send their own payload shape. */
+  cursorCommand?: string;
 }
 
 /** Where git keeps this repository's hooks, honouring core.hooksPath. */
@@ -65,6 +73,7 @@ function hookFilesOf(repo: Repo): HookFile[] {
     { file: join(hooksDir, 'post-commit'), installed: gitHookInstalled(hooksDir) },
     { file: join(stateDir, CODEX_NOTIFY), installed: codexNotifyInstalled(stateDir) },
     { file: join(repo.root, OPENCODE_PLUGIN_DIR, OPENCODE_PLUGIN), installed: openCodePluginInstalled(repo.root) },
+    { file: cursorHooksPath(repo.root), installed: cursorHooksInstalled(repo.root) },
   ];
 }
 
@@ -132,6 +141,9 @@ export function init(cwd: string, options: CommandOptions & HookOptions = {}): I
     }
     if (harnesses.find((harness) => harness.id === 'opencode')?.found === true) {
       hooks.push(installOpenCodePlugin(repo.root, options.hookCommand));
+    }
+    if (options.cursorCommand !== undefined && harnesses.find((h) => h.id === 'cursor')?.found === true) {
+      hooks.push(installCursorHooks(repo.root, options.cursorCommand));
     }
   }
   return result;
@@ -404,6 +416,30 @@ export function revert(cwd: string, options: RevertOptions = {}): RevertReport {
   return { repo, initialized, plan: applyRevert(repo, plan, { conflicts: options.conflicts }), selection };
 }
 
+/**
+ * Accounts for the tool's own silence. Everything it reports comes with
+ * something to do, because "not recording" is a state people need to get out
+ * of, not a diagnosis to admire.
+ */
+export function doctor(cwd: string, options: CommandOptions = {}): DoctorReport {
+  const repo = openRepo(cwd);
+  return diagnose(repo, { now: options.now, env: options.env, hooks: hookFilesOf(repo) });
+}
+
+export interface GcReport {
+  repo: Repo;
+  plan: GcPlan;
+  initialized: boolean;
+}
+
+/** Ages the stored file contents out of the ledger, keeping every run record. */
+export function gc(cwd: string, options: CommandOptions & GcOptions = {}): GcReport {
+  const repo = openRepo(cwd);
+  const initialized = readLedger(repo).head !== null && readStateDir(repo.root).exists;
+  const plan = collect(repo, { days: options.days, apply: options.apply, now: options.now });
+  return { repo, plan, initialized };
+}
+
 export interface SealReport {
   repo: Repo;
   result: SealResult;
@@ -427,7 +463,7 @@ export interface HooksReport {
 }
 
 /** Which adapter a `hooks` command is about. */
-export type HookAgent = 'claude-code' | 'git' | 'codex' | 'opencode' | 'all';
+export type HookAgent = 'claude-code' | 'git' | 'codex' | 'opencode' | 'cursor' | 'all';
 
 export function hooks(cwd: string, action: HooksAction, options: CommandOptions & HookOptions = {}): HooksReport {
   const repo = openRepo(cwd);
@@ -450,12 +486,17 @@ export function hooks(cwd: string, action: HooksAction, options: CommandOptions 
       if (options.hookCommand === undefined) throw new Error('no command to install');
       changes.push(installOpenCodePlugin(repo.root, options.hookCommand));
     }
+    if (agent === 'cursor' || agent === 'all') {
+      if (options.cursorCommand === undefined) throw new Error('no command to install');
+      changes.push(installCursorHooks(repo.root, options.cursorCommand));
+    }
   } else if (action === 'uninstall') {
     changes.push(uninstallClaudeCode(repo.root, { local: false }));
     changes.push(uninstallClaudeCode(repo.root, { local: true }));
     changes.push(uninstallGitHook(hooksDirOf(repo)));
     changes.push(uninstallCodexNotify(join(repo.root, STATE_DIR)));
     changes.push(uninstallOpenCodePlugin(repo.root));
+    changes.push(uninstallCursorHooks(repo.root));
   }
   return {
     repo,
