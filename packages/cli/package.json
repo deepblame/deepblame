@@ -3,6 +3,18 @@
   "version": "0.1.0",
   "description": "Know which AI agent wrote every line of your code, why it wrote it, and undo just that agent's work.",
   "license": "Apache-2.0",
+  "homepage": "https://github.com/deepblame/deepblame#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/deepblame/deepblame.git",
+    "directory": "packages/cli"
+  },
+  "bugs": {
+    "url": "https://github.com/deepblame/deepblame/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "type": "module",
   "bin": {
     "deepblame": "dist/deepblame.mjs",
