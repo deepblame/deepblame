@@ -11,7 +11,7 @@
 
 `git blame` tells you who committed a line. When three agents and two people work in the same repository, that is not enough. DeepBlame records which agent wrote each line, with which model and instructions, after reading which files, and lets you revert one agent's work without throwing away everyone else's.
 
-> **Status: pre-alpha.** Recording works today for **Claude Code**: every prompt, tool call and file edit is captured and sealed into the ledger, and `deepblame log` and `deepblame show` read it back. OpenCode, Codex and Cursor adapters, `blame --why` and surgical revert are being built in the open. See the [roadmap](#roadmap).
+> **Status: pre-alpha, and already useful.** Claude Code is recorded turn by turn; every other tool is covered at commit level. `deepblame blame` tells you which agent wrote a line and how sure it is, `deepblame cost` tells you what the agents spent. Surgical revert is next. See the [roadmap](#roadmap).
 
 ## Quick start
 
@@ -66,6 +66,22 @@ run 43ac7f2a-4564-43fa-8dfc-8c805b6a4429
     src/retry.ts    1 hunk, new → 1a4b7c2
 ```
 
+And the question the tool exists for — who wrote this line:
+
+```sh
+npx deepblame blame src/upload.ts
+```
+
+```
+src/upload.ts  10 lines, 50% traced, 50% written by agents
+
+  1-4          you, or a tool nobody recorded
+  5-9          claude-code  feb92f2  add a retry when the upload fails  90%  changed elsewhere since, this line came through
+  10           you, or a tool nobody recorded
+```
+
+The percentage is not decoration. A line is claimed only when the state the run left is still in the ledger and the line can be followed from there to the file as it stands now; anything else is reported as unknown rather than guessed. `--why 7` prints the whole run behind one line.
+
 Every run also carries what it cost, read from the agent's own session log:
 
 ```sh
@@ -96,6 +112,16 @@ Rates for models we do not know yet are left blank rather than guessed; add your
 
 Running `init` again is safe: it finds the existing ledger and repairs anything missing.
 
+## Which tools are covered
+
+| Tool | How | What you get |
+| --- | --- | --- |
+| **Claude Code** | its own hooks, installed by `init` | every prompt, tool call and edit, with model and cost |
+| **Codex** | `hooks install --agent codex`, then one line in your Codex config | one run per turn, with the files it changed |
+| **Anything else** — Cursor, Copilot, Windsurf, a cloud agent | `hooks install --agent git` | one run per commit, with the lines it changed |
+
+The fallbacks are coarser on purpose, and they say so: a commit knows the person who made it, never the tool that typed it. When a hooked agent and a commit both touch a line, the agent we actually watched keeps the credit.
+
 ## How recording works
 
 1. A hook calls `deepblame-capture` on every prompt, tool call and edit. It is a 10 KB bundle that appends one line to `.deepblame/queue.ndjson` and exits: no git process, no schema library, no network.
@@ -110,6 +136,7 @@ Running `init` again is safe: it finds the existing ledger and repairs anything 
 | `deepblame status` | Show what is set up and what is being recorded |
 | `deepblame log` | List recorded agent runs, newest first |
 | `deepblame show <run>` | Show one run in full |
+| `deepblame blame <file>` | Which agent wrote each line, with a confidence you can check |
 | `deepblame cost` | What the agents spent, by model and by agent |
 | `deepblame seal` | Fold captured events into the ledger now |
 | `deepblame hooks <action>` | `install`, `uninstall` or `status` for capture hooks |
@@ -119,9 +146,9 @@ Options: `-C <dir>` runs as if started in another directory, `--limit <n>` bound
 ## Roadmap
 
 1. **Foundation** — ledger, local state, agent detection. *Done.*
-2. **Capture** — Claude Code adapter, queue, sealer, model and cost accounting. *Done.* OpenCode, Codex and Cursor adapters plus a git fallback that works with any tool: next.
-3. **`deepblame blame --why`** — line-by-line provenance that survives edits, merges and reformatting, with a confidence score.
-4. **`deepblame revert --agent <id>`** — undo one agent's changes, with conflicts shown before anything is applied.
+2. **Capture** — Claude Code adapter, queue, sealer, model and cost accounting, a git fallback for every other tool, and a turn-level adapter for Codex. *Done.* A native OpenCode plugin is next.
+3. **`deepblame blame`** — line-by-line provenance with a confidence score. *First version done*: it survives edits elsewhere in the file and keeps the right owner when several agents touch one file. Merges, reformatting and rename tracking come next.
+4. **`deepblame revert --agent <id>`** — undo one agent's changes, with conflicts shown before anything is applied. The ledger now keeps the file contents this needs.
 5. Team dashboard, PR checks and signed audit reports.
 
 ## Development

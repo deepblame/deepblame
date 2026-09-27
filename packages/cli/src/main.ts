@@ -2,13 +2,17 @@ import { existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import {
+  FileNotTrackedError,
   GitError,
   NotARepositoryError,
+  blame,
   commandOnPath,
   cost,
   hooks,
   init,
   log,
+  recordCommit,
+  recordTurn,
   sealNow,
   show,
   status,
@@ -17,6 +21,8 @@ import {
 import { CLI_NAME } from '@deepblame/protocol';
 import pkg from '../package.json' with { type: 'json' };
 import {
+  formatBlame,
+  formatBlameLine,
   formatCost,
   formatHooks,
   formatInit,
@@ -51,14 +57,18 @@ Usage
   ${CLI_NAME} status           show what is set up and what is recorded
   ${CLI_NAME} log              list recorded agent runs, newest first
   ${CLI_NAME} show <run>       show one run in full
+  ${CLI_NAME} blame <file>     which agent wrote each line, and how sure we are
   ${CLI_NAME} cost             what the agents spent, by model and agent
   ${CLI_NAME} seal             fold captured events into the ledger now
   ${CLI_NAME} hooks <action>   install, uninstall or check capture hooks
+                   ${' '.repeat(CLI_NAME.length)}   --agent git also records every commit,
+                   ${' '.repeat(CLI_NAME.length)}   which covers tools that have no hooks
 
 Options
   -C <dir>        run as if started in <dir>
   --limit <n>     how many runs to list (default ${DEFAULT_LIMIT})
   --days <n>      only count the last <n> days in cost
+  --why <line>    explain one line in blame
   --local         keep hooks in .claude/settings.local.json, uncommitted
   --no-hooks      set up without touching your agent's settings
   --no-seal       list only what is already in the ledger
@@ -82,6 +92,11 @@ export function main(argv: readonly string[], io: Io): number {
         cwd: { type: 'string', short: 'C' },
         limit: { type: 'string' },
         days: { type: 'string' },
+        why: { type: 'string' },
+        agent: { type: 'string' },
+        intent: { type: 'string' },
+        notify: { type: 'string' },
+        mark: { type: 'boolean' },
         local: { type: 'boolean' },
         'no-hooks': { type: 'boolean' },
         'no-seal': { type: 'boolean' },
@@ -108,7 +123,7 @@ export function main(argv: readonly string[], io: Io): number {
 
   const cwd = values.cwd === undefined ? io.cwd : resolve(io.cwd, values.cwd);
   const style = makeStyle(io.color && !values.json);
-  const takesArgument = command === 'show' || command === 'hooks';
+  const takesArgument = command === 'show' || command === 'hooks' || command === 'blame';
   if (!takesArgument && argument !== undefined) return usageError(io, `unexpected argument '${argument}'`);
 
   let limit = DEFAULT_LIMIT;
@@ -154,6 +169,18 @@ export function main(argv: readonly string[], io: Io): number {
         io.stdout(values.json ? toJson(report.entry) : formatShow(report.entry, style));
         return EXIT.ok;
       }
+      case 'blame': {
+        if (argument === undefined) return usageError(io, `${CLI_NAME} blame needs a file`);
+        let why: number | undefined;
+        if (values.why !== undefined) {
+          why = Number(values.why);
+          if (!Number.isInteger(why) || why < 1) return usageError(io, `--why needs a line number`);
+        }
+        const report = blame(cwd, argument, { env: io.env, line: why, seal: values['no-seal'] !== true });
+        if (values.json) io.stdout(toJson(why === undefined ? report.result : report.line));
+        else io.stdout(why === undefined ? formatBlame(report, style) : formatBlameLine(report, why, style));
+        return EXIT.ok;
+      }
       case 'cost': {
         const report = cost(cwd, { env: io.env, days, seal: values['no-seal'] !== true });
         io.stdout(values.json ? toJson(report) : formatCost(report, style));
@@ -164,13 +191,38 @@ export function main(argv: readonly string[], io: Io): number {
         io.stdout(values.json ? toJson(report.result) : formatSeal(report.result, style));
         return EXIT.ok;
       }
+      // Called by the post-commit hook. Quiet on purpose: it must never get
+      // in the way of a commit, and nobody asked it to speak.
+      case 'record-commit': {
+        const report = recordCommit(cwd, { env: io.env });
+        if (values.json) io.stdout(toJson({ recorded: report.recorded, run: report.run?.run_id ?? null }));
+        return EXIT.ok;
+      }
+      // Called when a harness that reports only turns finishes one.
+      case 'record-turn': {
+        const report = recordTurn(cwd, {
+          env: io.env,
+          agent: values.agent,
+          intent: values.intent ?? intentFromNotify(values.notify),
+          mark: values.mark === true,
+        });
+        if (values.json) io.stdout(toJson({ recorded: report.recorded, run: report.run?.run_id ?? null }));
+        return EXIT.ok;
+      }
       case 'hooks': {
         if (argument === undefined) return usageError(io, `${CLI_NAME} hooks needs install, uninstall or status`);
         if (!isHooksAction(argument)) return usageError(io, `unknown hooks action '${argument}'`);
+        const agent = values.agent ?? 'claude-code';
+        if (agent !== 'claude-code' && agent !== 'git' && agent !== 'codex' && agent !== 'all') {
+          return usageError(io, `--agent takes claude-code, git, codex or all`);
+        }
         const report = hooks(cwd, argument, {
           env: io.env,
           hookCommand: hookCommand(io),
+          commitCommand: commitCommand(io),
+          turnCommand: turnCommand(io),
           local: values.local === true,
+          agent,
         });
         io.stdout(values.json ? toJson(report) : formatHooks(report, style));
         return EXIT.ok;
@@ -204,6 +256,38 @@ function hookCommand(io: Io): string {
   return `npx --yes --package=${CLI_NAME} ${capture}`;
 }
 
+/**
+ * Codex hands its notify program a JSON blob. The only part we want is what
+ * the user asked for; anything else in there is none of our business.
+ */
+function intentFromNotify(notify: string | undefined): string | null {
+  if (notify === undefined || notify.trim() === '') return null;
+  try {
+    const payload: unknown = JSON.parse(notify);
+    if (typeof payload !== 'object' || payload === null) return null;
+    const messages = (payload as Record<string, unknown>)['input-messages'];
+    if (Array.isArray(messages)) return messages.filter((item) => typeof item === 'string').join(' ').trim() || null;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/** How the git hook should call us. It runs once per commit, so size is no object. */
+function commitCommand(io: Io): string {
+  if (commandOnPath(CLI_NAME, io.env)) return `${CLI_NAME} record-commit`;
+  const entry = io.entry;
+  if (entry !== undefined && entry !== '') return `${quote(process.execPath)} ${quote(entry)} record-commit`;
+  return `npx --yes ${CLI_NAME} record-commit`;
+}
+
+function turnCommand(io: Io): string {
+  if (commandOnPath(CLI_NAME, io.env)) return `${CLI_NAME} record-turn`;
+  const entry = io.entry;
+  if (entry !== undefined && entry !== '') return `${quote(process.execPath)} ${quote(entry)} record-turn`;
+  return `npx --yes ${CLI_NAME} record-turn`;
+}
+
 function quote(path: string): string {
   return /[\s"']/.test(path) ? `"${path}"` : path;
 }
@@ -218,7 +302,9 @@ function usageError(io: Io, message: string): number {
 }
 
 function failure(io: Io, error: unknown): number {
-  if (error instanceof NotARepositoryError) {
+  if (error instanceof FileNotTrackedError) {
+    io.stderr(`${CLI_NAME}: ${error.message}\nGive a path inside this repository.\n`);
+  } else if (error instanceof NotARepositoryError) {
     io.stderr(`${CLI_NAME}: not inside a git repository.\nRun it from your project folder, or run 'git init' first.\n`);
   } else if (error instanceof GitError && error.status === null) {
     io.stderr(`${CLI_NAME}: git was not found on your PATH. Install git and try again.\n`);

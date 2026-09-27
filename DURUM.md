@@ -243,6 +243,10 @@ pnpm workspaces. `protocol` ve `core` yayınlanmayan iç paketler: TS kaynağı 
 18. **Maliyet verisi ajanın kendi oturum kaydından okunuyor**, ayrı bir API çağrısı veya anahtar gerekmiyor. Dolayısıyla maliyet, kaydın olduğu her yerde ücretsiz geliyor.
 19. **npm yayını elle tetikleniyor** (`release.yml`, Actions sekmesinden). Push'a bağlı otomatik yayın yok: yayın bilinçli bir karar olmalı.
 20. **npm'de token ile yayın yapılamıyor.** Hesapta 2FA açıkken npm, granular token'la bile tek kullanımlık kod istiyor (`EOTP`) — "yazma işlemleri için 2FA" ayarını kapatmak bile değiştirmedi. Bugünkü yayın şöyle yapıldı: Claude kendi konteynerinde `npm publish` başlattı, npm bir onay linki üretti, kullanıcı linke tıklayıp geçiş anahtarıyla onayladı, yayın tamamlandı. Kalıcı çözüm: npm **trusted publishing** (OIDC) — paket artık var olduğu için kurulabilir, token gerekmez.
+21. **Defter artık içerik de saklıyor** (yerelde, git nesnesi olarak). Kanıtlanamayan atıf yapmamak ve geri almayı mümkün kılmak için şart. Kod hâlâ makineden çıkmıyor; senkronizasyon sadece metadata gönderecek.
+22. **blame kanıtlayamadığı satırı talep etmiyor.** Yanlış ajanı işaret eden bir araç, hiç olmayan araçtan kötüdür.
+23. **Commit kaydı ajanın satırını çalmıyor.** Git yedeği her aracı kapsasın diye var, hook'la izlenen ajanın yerine geçsin diye değil.
+24. **Codex'in global config'ini biz değiştirmiyoruz.** Script'i yazıp tek satırlık ayarı kullanıcıya bırakıyoruz.
 
 ### 27 Eylül — yayına çıkış ve maliyet katmanı
 
@@ -256,14 +260,32 @@ pnpm workspaces. `protocol` ve `core` yayınlanmayan iç paketler: TS kaynağı 
 - Run kaydına `model` ve `cost` alanları geldi: `input_tokens`, `output_tokens`, `cache_write_tokens`, `cache_read_tokens`, `usd` (null olabilir), `source` (`rates` | `harness`).
 - `deepblame cost [--days N]` — dönem toplamı, token dökümü, modele ve ajana göre kırılım. `log` çıktısına da tur başı maliyet sütunu eklendi.
 
+### 27 Eylül (akşam) — blame, git yedeği, Codex
+
+**`deepblame blame <dosya>` çalışıyor.** Ürünün asıl vaadi artık kodda:
+- Her run'ın bıraktığı dosya hali defterde **içerik olarak** duruyor (yeni). Yakalama, dosyayı `.deepblame/blobs/<oid>` altına kopyalıyor; mühürleyici bunu git nesne deposuna yazıp defter ağacına `blobs/<ilk2>/<kalan>` olarak bağlıyor — böylece `git gc` silemiyor. Cerrahi geri alma da bunu kullanacak.
+- blame, her run için "o run'ın bıraktığı hal" ile "dosyanın bugünkü hali" arasında `git diff` alıp kaydedilen satır aralıklarını bugüne taşıyor. Araya giren düzenlemeler satırı kaydırdıysa takip ediyor, satırın üstüne yazıldıysa **iddiayı bırakıyor.**
+- Güven skoru uydurma değil: dosya run'ın bıraktığı halle birebir aynıysa %100, arada başka yerler değiştiyse ama satır aynen geldiyse %90. Takip edilemeyen satır "bilinmiyor" diyor.
+- İçeriği defterde bulunmayan run'lar satır talep etmiyor; çıktıda kaç run'ın kanıtsız kaldığı yazıyor.
+
+**Git yedeği (her araçta çalışır).** `deepblame hooks install --agent git` bir `post-commit` hook'u kuruyor; her commit deftere bir run olarak giriyor (değişen dosyalar, gerçek satır aralıkları, commit mesajı intent olarak, yazan kişi `actor`). Başkasının post-commit hook'u varsa korunuyor, kaldırırken sadece bizim satırımız siliniyor. **Önemli kural:** commit run'ları, hook'la izlediğimiz bir ajanın satırını asla elinden almıyor.
+
+**Codex / tur bazlı adaptör.** `hooks install --agent codex`, `.deepblame/codex-notify.sh` yazıyor; kullanıcı bunu kendi `~/.codex/config.toml` dosyasına tek satırla bağlıyor (proje dışındaki bir config'i biz değiştirmiyoruz). Mekanizma: her tur sonunda çalışma ağacının fotoğrafı alınıyor, bir öncekiyle farkı o turun işi sayılıyor. Kaba bir yöntem, o yüzden hook'u olan ajanlarda kullanılmıyor.
+
+**OpenCode:** native eklenti yazılmadı. Eklenti API'sini doğrulayacak dokümana erişemiyoruz; tahminle kod yazıp "destekliyoruz" demek bu üründe yapılacak en yanlış şey olurdu. OpenCode kullanıcıları bugün git yedeğiyle kapsanıyor, ayrıca `deepblame record-turn` komutunu kendi eklentilerinden çağırabiliyorlar. Doğrulanır doğrulanmaz yazılacak.
+
+**Testler:** 85 (protocol 10, core 56, cli 19).
+
 ### Faz 1'den kalanlar
 
-1. **OpenCode adaptörü** (eklenti API'si doğrulanacak), sonra Codex, sonra git yedek hook'u (`post-commit` → commit'i son run'a bağlar).
+1. ~~Git yedeği~~ ✅ · ~~Codex~~ ✅ · **OpenCode native eklentisi** — API doğrulanınca.
 2. ~~Model ve maliyet~~ ✅ 27 Eylül'de yapıldı.
-3. **SQLite indeks** — `log` şu an her run blob'unu okuyor; yüzlerce run'da yavaşlar.
+3. **SQLite indeks** — `log` ve `blame` şu an her run blob'unu okuyor; blame ayrıca run başına bir `git diff` süreci açıyor. Yüzlerce run'da yavaşlar.
 4. **Daemon** — hook başına 55 ms'yi 15 ms'nin altına indirmek için.
-5. **Kendi üstümüzde dogfood:** hook'lar bu repoya kuruldu ama Claude Code ayarları oturum başında okuduğu için gerçek kayıt bir sonraki oturumda başlayacak. İlk gerçek run'lar orada görülecek.
-6. **npm trusted publishing** kurulacak; sonra `NPM_TOKEN` gizli değeri ve tokenlar tamamen silinecek (kullanıcı zaten sildi).
+5. **Kendi üstümüzde dogfood:** hook'lar bu repoya kuruldu ama Claude Code ayarları oturum başında okuduğu için gerçek kayıt bir sonraki oturumda başlayacak.
+6. **npm trusted publishing** kurulacak.
+7. **blame'in kalan zorlukları:** dosya yeniden adlandırma takibi, birleşme (merge) sonrası satır takibi, biçimlendirme (prettier) sonrası "aynı satır mı" kararı. Bunlar mimari dokümandaki 40 senaryo testinin konusu.
+8. **Defter boyutu:** artık dosya içerikleri de defterde. Git sıkıştırıyor ve aynı içerik tekilleşiyor ama uzun vadede budama (eski blob'ları atma) politikası gerekecek.
 
 **Paralel (kullanıcı):**
 - `deepblame.com` ve `deepblame.dev` alınacak

@@ -1,5 +1,7 @@
 import { CLI_NAME, LEDGER_REF, PRODUCT_NAME, STATE_DIR } from '@deepblame/protocol';
 import type {
+  BlameReport,
+  BlameSpan,
   CostReport,
   HarnessDetection,
   HooksReport,
@@ -175,6 +177,90 @@ export function formatSeal(result: SealResult, s: Style): string {
   );
 }
 
+export function formatBlame(report: BlameReport, s: Style): string {
+  if (!report.initialized) {
+    return lines(`${PRODUCT_NAME} is not set up here: ${report.repo.root}`, `Run ${s.bold(`${CLI_NAME} init`)} to start.`);
+  }
+  const result = report.result;
+  if (result === null) return lines('Nothing to blame.');
+  if (result.runs === 0) {
+    return lines(
+      `${s.bold(report.path)}  ${s.dim(`${plural(result.lines, 'line')}`)}`,
+      '',
+      'No recorded agent has written in this file.',
+      s.dim('Either it is all yours, or it was written before recording was on.'),
+    );
+  }
+
+  const traced = `${Math.round(result.tracedShare * 100)}% traced`;
+  const byAgents = result.agentShare > 0 ? `, ${Math.round(result.agentShare * 100)}% written by agents` : '';
+  const rows = [`${s.bold(report.path)}  ${s.dim(`${plural(result.lines, 'line')}, ${traced}${byAgents}`)}`, ''];
+  for (const span of result.spans) {
+    const range = span.from === span.to ? `${span.from}` : `${span.from}-${span.to}`;
+    if (span.run === null) {
+      rows.push(`  ${s.dim(pad(range, 11))}  ${s.dim('you, or a tool nobody recorded')}`);
+      continue;
+    }
+    const intent = span.run.task.intent ?? '(no prompt recorded)';
+    rows.push(
+      `  ${pad(range, 11)}  ${who(span.run)}  ${s.bold(shortId(span.run.run_id))}  ${clip(intent, INTENT_WIDTH)}  ${s.dim(
+        confidence(span.confidence, span.reason),
+      )}`,
+    );
+  }
+  if (result.unverifiable > 0) {
+    rows.push(
+      '',
+      s.dim(
+        `${plural(result.unverifiable, 'run')} wrote this file but the ledger no longer holds what they left, so their lines are not claimed.`,
+      ),
+    );
+  }
+  rows.push('', s.dim(`${CLI_NAME} blame ${report.path} --why <line>  to see the whole run behind one line.`));
+  return lines(...rows);
+}
+
+export function formatBlameLine(report: BlameReport, line: number, s: Style): string {
+  const span = report.line;
+  if (span === null || span.run === null) {
+    return lines(
+      `${s.bold(`line ${line} of ${report.path}`)}`,
+      '',
+      '  No recorded agent wrote this line.',
+      s.dim('  It is yours, it predates recording, or a later edit replaced what an agent left.'),
+    );
+  }
+  const { run } = span;
+  const rows = [
+    `${s.bold(`line ${line} of ${report.path}`)}`,
+    '',
+    `  written by  ${who(run)}${run.model === null ? '' : `  ${s.dim(run.model.name)}`}`,
+    `  run         ${shortId(run.run_id)}  ${s.dim(run.started_at)}`,
+    `  intent      ${run.task.intent ?? s.dim('not recorded')}`,
+    `  confidence  ${confidence(span.confidence, span.reason)}`,
+  ];
+  if (run.cost !== undefined) rows.push(`  the turn     ${money(run.cost.usd)}, ${run.tool_calls.length} tool calls`);
+  rows.push('', s.dim(`${CLI_NAME} show ${shortId(run.run_id)}  for everything that run did.`));
+  return lines(...rows);
+}
+
+/** A commit knows the person who made it; an agent run knows the tool. */
+function who(run: NonNullable<BlameSpan['run']>): string {
+  return run.harness.name === 'git' && run.actor.type === 'human' ? `git (${run.actor.id})` : run.harness.name;
+}
+
+/** Says the number and what it means: a score with no explanation is noise. */
+function confidence(value: number, reason: string): string {
+  const percent = `${Math.round(value * 100)}%`;
+  if (reason === 'exact') return `${percent}  the file is exactly as the run left it`;
+  if (reason === 'survived') return `${percent}  changed elsewhere since, this line came through`;
+  return percent;
+}
+
+function shortId(runId: string): string {
+  return runId.replace(/-/g, '').slice(0, 7);
+}
+
 export function formatCost(report: CostReport, s: Style): string {
   if (!report.initialized) {
     return lines(`${PRODUCT_NAME} is not set up here: ${report.repo.root}`, `Run ${s.bold(`${CLI_NAME} init`)} to start.`);
@@ -226,16 +312,30 @@ export function formatCost(report: CostReport, s: Style): string {
 export function formatHooks(report: HooksReport, s: Style): string {
   const installed = report.files.filter((file) => file.installed);
   if (report.action === 'install') {
-    const change = report.changes[0];
-    const file = change === undefined ? '' : relativeTo(report.repo.root, [change.file]);
-    return lines(
-      change?.changed === true
-        ? `${s.green('✓')} Capture hooks installed in ${s.bold(file)}.`
-        : `Capture hooks were already in ${s.bold(file)}.`,
-      s.dim(`  ${change?.command ?? ''}`),
-      '',
-      `Claude Code now reports every prompt, tool call and edit to ${PRODUCT_NAME}.`,
-    );
+    const rows: string[] = [];
+    for (const change of report.changes) {
+      const where = relativeTo(report.repo.root, [change.file]);
+      const what = change.file.endsWith('post-commit')
+        ? 'Every commit is now recorded, whichever tool wrote it'
+        : change.file.endsWith('codex-notify.sh')
+          ? 'Codex can now report each finished turn'
+          : 'Claude Code now reports every prompt, tool call and edit';
+      rows.push(
+        change.changed
+          ? `${s.green('✓')} ${what}: ${s.bold(where)}`
+          : `${s.dim('·')} ${what}: ${s.bold(where)} ${s.dim('(already there)')}`,
+      );
+    }
+    const codex = report.changes.find((change) => change.file.endsWith('codex-notify.sh'));
+    if (codex !== undefined) {
+      rows.push(
+        '',
+        'One line left, and it is yours to add, not ours — Codex reads a config outside this project:',
+        s.bold(`  notify = ["${codex.file}"]`),
+        s.dim('  goes in ~/.codex/config.toml'),
+      );
+    }
+    return lines(...rows);
   }
   if (report.action === 'uninstall') {
     const changed = report.changes.filter((change) => change.changed);

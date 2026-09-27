@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
-import { appendFileSync, existsSync, readFileSync, statSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { CONFIG_FILE, QUEUE_FILE, STATE_DIR } from '@deepblame/protocol/names';
+import { BLOBS_DIR, CONFIG_FILE, QUEUE_FILE, STATE_DIR } from '@deepblame/protocol/names';
 import type { HarnessId, QueueEvent, QueueHunk } from '@deepblame/protocol/queue';
 
 /**
@@ -29,6 +29,8 @@ export interface CaptureContext {
   promptText: boolean;
   /** Keep a one-line summary of the prompt, so `deepblame log` is readable. */
   intent: boolean;
+  /** Park file contents for the sealer. Off means blame and revert lose their evidence. */
+  keepContent: boolean;
 }
 
 export interface CaptureResult {
@@ -54,7 +56,14 @@ export function openCapture(cwd: string): CaptureContext | null {
   if (root === null) return null;
   const stateDir = join(root, STATE_DIR);
   if (!existsSync(stateDir)) return null;
-  const context: CaptureContext = { root, stateDir, objectFormat: 'sha1', promptText: false, intent: true };
+  const context: CaptureContext = {
+    root,
+    stateDir,
+    objectFormat: 'sha1',
+    promptText: false,
+    intent: true,
+    keepContent: true,
+  };
   try {
     const raw: unknown = JSON.parse(readFileSync(join(stateDir, CONFIG_FILE), 'utf8'));
     if (isRecord(raw)) {
@@ -63,6 +72,7 @@ export function openCapture(cwd: string): CaptureContext | null {
       if (isRecord(capture)) {
         if (typeof capture['prompt_text'] === 'boolean') context.promptText = capture['prompt_text'];
         if (typeof capture['intent'] === 'boolean') context.intent = capture['intent'];
+        if (typeof capture['content'] === 'boolean') context.keepContent = capture['content'];
       }
     }
   } catch {
@@ -125,7 +135,7 @@ export function captureClaudeCode(payload: unknown, context: CaptureContext, now
       if (tool === null || !WRITE_TOOLS.has(tool)) return none;
       const path = repoPath(context.root, filePathOf(payload['tool_input']));
       if (path === null) return none;
-      const before = hashFile(join(context.root, path), context.objectFormat);
+      const before = hashFile(context, join(context.root, path));
       return {
         events: [{ ...base, k: 'write-pre', path, blob: before.blob, lines: before.lines }],
         seal: false,
@@ -151,7 +161,7 @@ export function captureClaudeCode(payload: unknown, context: CaptureContext, now
       if (path !== null && READ_TOOLS.has(tool)) {
         events.push({ ...base, k: 'read', path });
       } else if (path !== null && WRITE_TOOLS.has(tool)) {
-        const after = hashFile(join(context.root, path), context.objectFormat);
+        const after = hashFile(context, join(context.root, path));
         events.push({
           ...base,
           k: 'write',
@@ -190,18 +200,35 @@ export function appendEvents(context: CaptureContext, events: readonly QueueEven
   }
 }
 
-function hashFile(file: string, format: 'sha1' | 'sha256'): { blob: string | null; lines: number; text: string | null } {
+function hashFile(context: CaptureContext, file: string): { blob: string | null; lines: number; text: string | null } {
   const empty = { blob: null, lines: 0, text: null };
   try {
     const stat = statSync(file);
     if (!stat.isFile() || stat.size > MAX_HASH_BYTES) return empty;
     const content = readFileSync(file);
-    const blob = gitBlobOid(content, format);
+    const blob = gitBlobOid(content, context.objectFormat);
+    if (context.keepContent) park(context, blob, content);
     const binary = content.subarray(0, BINARY_SNIFF_BYTES).includes(0);
     const text = binary ? null : content.toString('utf8');
     return { blob, lines: text === null ? 0 : countLines(text), text };
   } catch {
     return empty;
+  }
+}
+
+/**
+ * Keeps a copy of the content under its own object id until the sealer files
+ * it in git. Without it, `blame` can only guess whether a line is still the
+ * line the agent wrote, and `revert` has nothing to put back.
+ */
+function park(context: CaptureContext, oid: string, content: Buffer): void {
+  const file = join(context.stateDir, BLOBS_DIR, oid);
+  try {
+    if (existsSync(file)) return;
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, content, { flag: 'wx' });
+  } catch {
+    // Someone else parked it first, or the disk refused: the agent must not care.
   }
 }
 

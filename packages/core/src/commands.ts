@@ -1,16 +1,29 @@
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { STATE_DIR, type HarnessId, type Run } from '@deepblame/protocol';
+import { FileNotTrackedError, blameFile, type BlameResult, type BlameSpan } from './blame';
 import { detectHarnesses, type HarnessDetection } from './detect';
+import { tryGit } from './git';
+import { runFromCommit } from './gitrun';
 import {
+  CODEX_NOTIFY,
+  codexNotifyInstalled,
+  gitHookInstalled,
   hooksInstalled,
   installClaudeCode,
+  installCodexNotify,
+  installGitHook,
   uninstallClaudeCode,
+  uninstallCodexNotify,
+  uninstallGitHook,
   type HookChange,
   type HookFile,
 } from './hooks';
 import { createGenesis, readLedger, type LedgerState } from './ledger';
 import { openRepo, type Repo } from './repo';
 import { findRun, listRuns, type LedgerRun } from './runs';
-import { seal, type SealResult } from './seal';
+import { appendRuns, seal, type SealResult } from './seal';
 import { ensureStateDir, readStateDir, type StateDirInfo } from './state';
+import { markWorktree, recordWorktreeTurn } from './worktree';
 
 export interface CommandOptions {
   now?: Date;
@@ -20,10 +33,62 @@ export interface CommandOptions {
 export interface HookOptions {
   /** How a hook should call us. Without it nothing is installed. */
   hookCommand?: string;
+  /** How the git hook should call us; the capture command will not do. */
+  commitCommand?: string;
   /** Leave the agent's settings alone. */
   noHooks?: boolean;
   /** Write to the personal settings file instead of the shared one. */
   local?: boolean;
+  /** Which adapter to act on. Defaults to Claude Code. */
+  agent?: 'claude-code' | 'git' | 'codex' | 'all';
+  /** How the Codex notify script should call us. */
+  turnCommand?: string;
+}
+
+/** Where git keeps this repository's hooks, honouring core.hooksPath. */
+export function hooksDirOf(repo: Repo): string {
+  const configured = tryGit(['config', '--get', 'core.hooksPath'], { cwd: repo.root });
+  return configured === null || configured === '' ? join(repo.commonDir, 'hooks') : resolve(repo.root, configured);
+}
+
+function hookFilesOf(repo: Repo): HookFile[] {
+  const hooksDir = hooksDirOf(repo);
+  const stateDir = join(repo.root, STATE_DIR);
+  return [
+    ...hooksInstalled(repo.root),
+    { file: join(hooksDir, 'post-commit'), installed: gitHookInstalled(hooksDir) },
+    { file: join(stateDir, CODEX_NOTIFY), installed: codexNotifyInstalled(stateDir) },
+  ];
+}
+
+export interface RecordTurnOptions extends CommandOptions {
+  agent?: string;
+  intent?: string | null;
+  /** Only move the baseline forward, recording nothing. */
+  mark?: boolean;
+}
+
+/**
+ * Records what a turn changed for a harness that reports turns but not tools.
+ * Used by the Codex notify script, and by anything else that can run a
+ * command when its agent stops.
+ */
+export function recordTurn(cwd: string, options: RecordTurnOptions = {}): RecordCommitReport {
+  const repo = openRepo(cwd);
+  const now = options.now ?? new Date();
+  if (!readStateDir(repo.root).exists) return { repo, run: null, recorded: false, head: null };
+  if (options.mark === true) {
+    markWorktree(repo, now);
+    return { repo, run: null, recorded: false, head: readLedger(repo).head };
+  }
+  const run = recordWorktreeTurn(repo, {
+    agent: (options.agent ?? 'git') as HarnessId,
+    intent: options.intent ?? null,
+    now,
+  });
+  if (run === null) return { repo, run: null, recorded: false, head: readLedger(repo).head };
+  const result = appendRuns(repo, [run], now);
+  return { repo, run, recorded: result.sealed > 0, head: result.head };
 }
 
 export interface InitResult {
@@ -76,7 +141,7 @@ export function status(cwd: string, options: CommandOptions = {}): StatusReport 
   const repo = openRepo(cwd);
   const ledger = readLedger(repo);
   const stateDir = readStateDir(repo.root);
-  const hooks = hooksInstalled(repo.root);
+  const hooks = hookFilesOf(repo);
   return {
     repo,
     initialized: ledger.head !== null && stateDir.exists,
@@ -133,6 +198,43 @@ export function show(cwd: string, id: string, options: ShowOptions = {}): ShowRe
   const repo = openRepo(cwd);
   if (options.seal !== false) seal(repo, { now: options.now });
   return { repo, id, entry: findRun(repo, id) };
+}
+
+export interface BlameOptions extends CommandOptions {
+  seal?: boolean;
+  /** Explain one line instead of the whole file. */
+  line?: number;
+}
+
+export interface BlameReport {
+  repo: Repo;
+  initialized: boolean;
+  /** Repository-relative path, as the ledger spells it. */
+  path: string;
+  result: BlameResult | null;
+  /** Set when a line was asked about; null when that line has no known author. */
+  line: BlameSpan | null;
+}
+
+/** Who wrote each line of a file, and how sure we are. */
+export function blame(cwd: string, file: string, options: BlameOptions = {}): BlameReport {
+  const repo = openRepo(cwd);
+  const stateDir = readStateDir(repo.root);
+  const initialized = readLedger(repo).head !== null && stateDir.exists;
+  const path = repoRelative(repo, cwd, file);
+  if (!initialized) return { repo, initialized, path, result: null, line: null };
+  if (options.seal !== false) seal(repo, { now: options.now });
+  const result = blameFile(repo, path);
+  const line = options.line === undefined ? null : result.spans.find((span) => span.from <= (options.line as number) && span.to >= (options.line as number)) ?? null;
+  return { repo, initialized, path, result, line };
+}
+
+/** Accepts what the user typed: absolute, relative to here, or already repo-relative. */
+function repoRelative(repo: Repo, cwd: string, file: string): string {
+  const absolute = isAbsolute(file) ? file : resolve(cwd, file);
+  const rel = relative(repo.root, absolute);
+  if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) throw new FileNotTrackedError(file);
+  return sep === '/' ? rel : rel.split(sep).join('/');
 }
 
 export interface CostBucket {
@@ -262,19 +364,56 @@ export interface HooksReport {
 
 export function hooks(cwd: string, action: HooksAction, options: CommandOptions & HookOptions = {}): HooksReport {
   const repo = openRepo(cwd);
+  const agent = options.agent ?? 'claude-code';
   const changes: HookChange[] = [];
   if (action === 'install') {
-    if (options.hookCommand === undefined) throw new Error('no command to install');
-    changes.push(installClaudeCode(repo.root, options.hookCommand, { local: options.local }));
+    if (agent === 'claude-code' || agent === 'all') {
+      if (options.hookCommand === undefined) throw new Error('no command to install');
+      changes.push(installClaudeCode(repo.root, options.hookCommand, { local: options.local }));
+    }
+    if (agent === 'git' || agent === 'all') {
+      if (options.commitCommand === undefined) throw new Error('no command to install');
+      changes.push(installGitHook(hooksDirOf(repo), options.commitCommand));
+    }
+    if (agent === 'codex' || agent === 'all') {
+      if (options.turnCommand === undefined) throw new Error('no command to install');
+      changes.push(installCodexNotify(repo.root, options.turnCommand, join(repo.root, STATE_DIR)));
+    }
   } else if (action === 'uninstall') {
     changes.push(uninstallClaudeCode(repo.root, { local: false }));
     changes.push(uninstallClaudeCode(repo.root, { local: true }));
+    changes.push(uninstallGitHook(hooksDirOf(repo)));
+    changes.push(uninstallCodexNotify(join(repo.root, STATE_DIR)));
   }
   return {
     repo,
     action,
     changes,
-    files: hooksInstalled(repo.root),
+    files: hookFilesOf(repo),
     harnesses: detectHarnesses(repo.root, options.env),
   };
+}
+
+export interface RecordCommitReport {
+  repo: Repo;
+  /** Null when there was nothing to record, or DeepBlame is not set up here. */
+  run: Run | null;
+  /** False when the ledger already held this commit. */
+  recorded: boolean;
+  head: string | null;
+}
+
+/**
+ * Records the commit that just landed. Called by the post-commit hook, so it
+ * must never fail loudly: a recorder that breaks `git commit` is a recorder
+ * people rip out the same afternoon.
+ */
+export function recordCommit(cwd: string, options: CommandOptions & { ref?: string } = {}): RecordCommitReport {
+  const repo = openRepo(cwd);
+  const now = options.now ?? new Date();
+  if (!readStateDir(repo.root).exists) return { repo, run: null, recorded: false, head: null };
+  const run = runFromCommit(repo, options.ref ?? 'HEAD', now);
+  if (run === null) return { repo, run: null, recorded: false, head: readLedger(repo).head };
+  const result = appendRuns(repo, [run], now);
+  return { repo, run, recorded: result.sealed > 0, head: result.head };
 }

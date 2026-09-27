@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
+  BLOBS_DIR,
   CLI_NAME,
   LEDGER_IDENTITY,
   LEDGER_REF,
@@ -88,6 +89,8 @@ export function seal(repo: Repo, options: { now?: Date } = {}): SealResult {
     const rates = readRates(repo.root);
     const rejected: string[] = [];
     const records: { id: string; json: string }[] = [];
+    /** Every file state the sealed runs refer to, so the ledger can keep it. */
+    const blobs = new Set<string>();
     for (const segment of closed) {
       const candidate = runOf(segment, env, transcripts.get(sessionKey(segment.agent, segment.session)) ?? null, rates);
       if (candidate === null) continue;
@@ -97,9 +100,13 @@ export function seal(repo: Repo, options: { now?: Date } = {}): SealResult {
         continue;
       }
       records.push({ id: parsed.value.run_id, json: `${JSON.stringify(parsed.value, null, 2)}\n` });
+      for (const file of parsed.value.files_written) {
+        if (file.pre_blob_sha !== null) blobs.add(file.pre_blob_sha);
+        if (file.post_blob_sha !== null) blobs.add(file.post_blob_sha);
+      }
     }
 
-    const head = records.length > 0 ? commitRuns(repo, records, now) : readLedger(repo).head;
+    const head = records.length > 0 ? commitRuns(repo, records, [...blobs], now) : readLedger(repo).head;
     writeQueue(queuePath, buffer.length, leftover, tail);
     return {
       sealed: records.length,
@@ -112,6 +119,42 @@ export function seal(repo: Repo, options: { now?: Date } = {}): SealResult {
   } finally {
     rmSync(lock, { force: true });
   }
+}
+
+/**
+ * Writes finished runs straight into the ledger, without the queue. Used by
+ * the git fallback, where the commit itself is already a complete record.
+ * A run the ledger already holds is left alone, so recording twice is safe.
+ */
+export function appendRuns(repo: Repo, runs: readonly unknown[], now: Date = new Date()): SealResult {
+  const records: { id: string; json: string }[] = [];
+  const blobs = new Set<string>();
+  const rejected: string[] = [];
+  const head = readLedger(repo).head;
+
+  for (const candidate of runs) {
+    const parsed = parseRun(candidate);
+    if (!parsed.ok) {
+      rejected.push(parsed.issues.join('; '));
+      continue;
+    }
+    const id = parsed.value.run_id;
+    if (head !== null && tryGit(['cat-file', '-e', `${head}:runs/${id}.json`], { cwd: repo.root }) !== null) continue;
+    records.push({ id, json: `${JSON.stringify(parsed.value, null, 2)}\n` });
+    for (const file of parsed.value.files_written) {
+      if (file.pre_blob_sha !== null) blobs.add(file.pre_blob_sha);
+      if (file.post_blob_sha !== null) blobs.add(file.post_blob_sha);
+    }
+  }
+
+  return {
+    sealed: records.length,
+    events: 0,
+    pending: 0,
+    rejected,
+    head: records.length > 0 ? commitRuns(repo, records, [...blobs], now) : head,
+    busy: false,
+  };
 }
 
 /** One writer at a time. A crashed seal leaves a lock behind; it expires. */
@@ -361,7 +404,12 @@ function collectWrites(events: readonly QueueEvent[]): Run['files_written'] {
  * user's own index is never touched, then moves the ref only if nobody else
  * moved it first.
  */
-function commitRuns(repo: Repo, records: readonly { id: string; json: string }[], now: Date): string {
+function commitRuns(
+  repo: Repo,
+  records: readonly { id: string; json: string }[],
+  blobs: readonly string[],
+  now: Date,
+): string {
   const cwd = repo.root;
   const indexFile = join(repo.root, STATE_DIR, SEAL_INDEX_FILE);
   const date = now.toISOString();
@@ -379,6 +427,15 @@ function commitRuns(repo: Repo, records: readonly { id: string; json: string }[]
           env: { GIT_INDEX_FILE: indexFile },
         });
       }
+      for (const oid of blobs) {
+        if (!keepBlob(repo, oid)) continue;
+        // Sharded like git's own loose objects: a flat directory of thousands
+        // of entries makes every later tree read pay for all of them.
+        git(['update-index', '--add', '--cacheinfo', `100644,${oid},blobs/${oid.slice(0, 2)}/${oid.slice(2)}`], {
+          cwd,
+          env: { GIT_INDEX_FILE: indexFile },
+        });
+      }
       const tree = git(['write-tree'], { cwd, env: { GIT_INDEX_FILE: indexFile } });
       const commit = git(['commit-tree', '--no-gpg-sign', tree, '-p', head, '-m', message], {
         cwd,
@@ -392,6 +449,8 @@ function commitRuns(repo: Repo, records: readonly { id: string; json: string }[]
         },
       });
       git(['update-ref', '-m', `${CLI_NAME} seal`, LEDGER_REF, commit, head], { cwd });
+      // The ledger holds the contents now, so the parked copies can go.
+      for (const oid of blobs) rmSync(join(repo.root, STATE_DIR, BLOBS_DIR, oid), { force: true });
       return commit;
     } catch (error) {
       if (attempt >= MAX_ATTEMPTS || !(error instanceof GitError) || error.status === null) throw error;
@@ -399,6 +458,20 @@ function commitRuns(repo: Repo, records: readonly { id: string; json: string }[]
       rmSync(indexFile, { force: true });
     }
   }
+}
+
+/**
+ * Moves one parked file state into git's object store, or confirms the object
+ * is already there. Returning false means the content is gone and the ledger
+ * records only its id: blame will say so rather than pretend.
+ */
+function keepBlob(repo: Repo, oid: string): boolean {
+  const parked = join(repo.root, STATE_DIR, BLOBS_DIR, oid);
+  if (existsSync(parked)) {
+    // --no-filters: the id was computed from the bytes, so the bytes go in as they are.
+    return tryGit(['hash-object', '-w', '--no-filters', '--', parked], { cwd: repo.root }) === oid;
+  }
+  return tryGit(['cat-file', '-e', `${oid}^{blob}`], { cwd: repo.root }) !== null;
 }
 
 /** Puts back what we did not seal, plus anything captured while we worked. */

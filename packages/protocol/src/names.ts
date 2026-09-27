@@ -30,3 +30,9 @@ export const CONFIG_FILE = 'config.json';
 export const IGNORE_FILE = '.gitignore';
 export const SEAL_LOCK_FILE = 'seal.lock';
 export const SEAL_INDEX_FILE = 'seal.index';
+/**
+ * Where the capture path parks file contents until the sealer moves them into
+ * git's object store. Without the content there is no way to prove a line is
+ * still the line an agent wrote, and no way to put it back.
+ */
+export const BLOBS_DIR = 'blobs';

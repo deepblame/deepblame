@@ -1,6 +1,6 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { CLI_NAME } from '@deepblame/protocol';
+import { CLI_NAME, PRODUCT_NAME } from '@deepblame/protocol';
 
 /**
  * Adapter installation. Each harness gets its events to us its own way; the
@@ -11,6 +11,9 @@ import { CLI_NAME } from '@deepblame/protocol';
 export const CLAUDE_DIR = '.claude';
 export const CLAUDE_SETTINGS = 'settings.json';
 export const CLAUDE_SETTINGS_LOCAL = 'settings.local.json';
+
+/** Marks the lines we wrote into someone else's file, so we can remove exactly those. */
+const MARKER = `# ${PRODUCT_NAME}: records this commit, for tools that have no hooks of their own.`;
 
 /**
  * Ours, whichever way it is spelled: `deepblame-capture`, `deepblame capture`
@@ -124,6 +127,90 @@ export function uninstallClaudeCode(root: string, options: HookOptions = {}): Ho
   else settings['hooks'] = hooks;
   if (changed) writeSettings(file, settings);
   return { file, installed: false, changed, command: '' };
+}
+
+/**
+ * The fallback adapter: a `post-commit` hook, so a tool with no hooks at all
+ * is still on the record at commit granularity. Someone else's hook in that
+ * file is kept; we add a line and can take exactly that line back out.
+ */
+export function installGitHook(hooksDir: string, command: string): HookChange {
+  const file = join(hooksDir, 'post-commit');
+  const call = `${command} || true`;
+  const existing = existsSync(file) ? readFileSync(file, 'utf8') : null;
+  if (existing !== null && existing.includes(MARKER)) return { file, installed: true, changed: false, command };
+
+  const body =
+    existing === null
+      ? `#!/bin/sh\n${MARKER}\n${call}\n`
+      : `${existing.endsWith('\n') ? existing : `${existing}\n`}\n${MARKER}\n${call}\n`;
+  mkdirSync(hooksDir, { recursive: true });
+  writeFileSync(file, body);
+  chmodSync(file, 0o755);
+  return { file, installed: true, changed: true, command };
+}
+
+export function uninstallGitHook(hooksDir: string): HookChange {
+  const file = join(hooksDir, 'post-commit');
+  if (!existsSync(file)) return { file, installed: false, changed: false, command: '' };
+  const before = readFileSync(file, 'utf8');
+  if (!before.includes(MARKER)) return { file, installed: false, changed: false, command: '' };
+  const kept = before
+    .split('\n')
+    .filter((line) => !line.includes(MARKER) && !line.includes('record-commit'))
+    .join('\n');
+  // Nothing but a shebang and blank lines left: the file was only ever ours.
+  if (kept.replace(/^#!.*$/m, '').trim() === '') rmSync(file, { force: true });
+  else writeFileSync(file, kept.endsWith('\n') ? kept : `${kept}\n`);
+  return { file, installed: false, changed: true, command: '' };
+}
+
+export function gitHookInstalled(hooksDir: string): boolean {
+  const file = join(hooksDir, 'post-commit');
+  try {
+    return existsSync(file) && readFileSync(file, 'utf8').includes(MARKER);
+  } catch {
+    return false;
+  }
+}
+
+export const CODEX_NOTIFY = 'codex-notify.sh';
+
+/**
+ * Codex tells a program of its own choosing when a turn ends, and that is all
+ * it tells anyone. We write that program; the user points their Codex config
+ * at it, because a tool has no business editing a config outside the project.
+ */
+export function installCodexNotify(root: string, command: string, stateDir: string): HookChange {
+  const file = join(stateDir, CODEX_NOTIFY);
+  const body = [
+    '#!/bin/sh',
+    MARKER,
+    `cd ${shellQuote(root)} || exit 0`,
+    `${command} --agent codex --notify "$1" >/dev/null 2>&1 || true`,
+    '',
+  ].join('\n');
+  const existing = existsSync(file) ? readFileSync(file, 'utf8') : null;
+  if (existing === body) return { file, installed: true, changed: false, command };
+  mkdirSync(stateDir, { recursive: true });
+  writeFileSync(file, body);
+  chmodSync(file, 0o755);
+  return { file, installed: true, changed: true, command };
+}
+
+export function uninstallCodexNotify(stateDir: string): HookChange {
+  const file = join(stateDir, CODEX_NOTIFY);
+  const changed = existsSync(file);
+  rmSync(file, { force: true });
+  return { file, installed: false, changed, command: '' };
+}
+
+export function codexNotifyInstalled(stateDir: string): boolean {
+  return existsSync(join(stateDir, CODEX_NOTIFY));
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
 function fileCallsUs(file: string): boolean {
