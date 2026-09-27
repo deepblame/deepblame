@@ -402,6 +402,12 @@ Kritik olan şu: **içerikler de gidiyor.** `pull` sonrası karşı makine iş a
 
 **Testler:** 214. `pnpm check` geçiyor.
 
+### 28 Eylül — Windows doğrulandı, 0.3.0
+
+Yükleme sonrası CI kendiliğinden çalıştı ve **altı işin hepsi geçti** — Windows dahil. Aylardır açık duran "Windows hiç denenmedi" maddesi böylece kapandı (yukarıda 17. bölümde işaretlendi).
+
+**Sürüm 0.3.0.** npm'deki 0.2.0'da `push` / `pull` / `report` **yok**. Kendi verdiğimiz GitHub Action örneği `npx deepblame@latest report` çağırıyor; yani bugün onu kopyalayan biri hata alırdı. Yayınlanması şart, kozmetik bir sürüm artışı değil. Eklenti de aynı numarada tutuldu (0.3.0) — iki ayrı numara takip etmeye değmez.
+
 ## 17. Açık sorular
 
 - **Claude Code hook şeması kendi bilgimizden yazıldı** (dokümantasyona erişilemedi: alan adı izin istedi, kullanıcı reddetti). Alan adları (`hook_event_name`, `tool_name`, `tool_input.file_path`, `old_string`/`new_string`, `session_id`) doğru biliniyor ama **gerçek bir Claude Code oturumunda henüz doğrulanmadı.** İlk dogfood turunda kontrol edilecek; yanlış alan varsa `capture.ts` içinde tek yerde düzelir.
@@ -409,7 +415,7 @@ Kritik olan şu: **içerikler de gidiyor.** `pull` sonrası karşı makine iş a
 - Köken motoru uzun düzenleme zincirlerinde ne kadar bozulur? (Faz 2'de 40 senaryo testiyle ölçülecek)
 - **İki makinede ayrı ayrı `init`** → iki farklı genesis commit. Senk fazında iki defter birleştirilecek (merge commit, küme birleşimi); `status` şimdilik ilk kökü gösteriyor.
 - **`git log --all` defteri de gösteriyor** (her `refs/*` gibi). Faz 1'de run'lar arttıkça gürültü olabilir; toplu commit ve dokümantasyonla ele alınacak.
-- **Windows henüz gerçek bir makinede çalıştırılmadı.** İlk gerçek doğrulama repo GitHub'a yüklenince CI'da olacak; Windows kuralları şimdilik Linux'ta taklit edilerek test edildi.
+- ~~**Windows henüz gerçek bir makinede çalıştırılmadı.**~~ → **28 Eylül'de kapandı.** CI (`ci #13`) ubuntu + macOS + Windows × Node 22/24 = altı işin hepsinde geçti. Windows'ta sadece testler değil `smoke` de çalıştı: paketlenmiş CLI temiz bir depoda gerçekten çalıştırılıp hiçbir şeye dokunmadığı kontrol edildi. Geriye kalan Windows riski gerçek bir kullanıcının makinesindeki ajan kurulumları (Cursor/Claude Code hook yolları), CI'ın göremeyeceği kısım.
 - ~~**Hook gecikmesi 55 ms**~~ → 42 ms, bizim payımız 15 ms (bütçe içinde). Kalanı Node'un kendi açılışı. Daemon ertelendi.
 - **`init` ajan ayar dosyasını değiştiriyor.** Kullanıcılar bunu saygısızlık olarak görür mü, yoksa kolaylık mı? İlk geri bildirimlerde ölçülecek; `--no-hooks` var.
 - **Fiyat tablosu eskir** (OpenCode'da sorun değil, kendi rakamını veriyor; Claude Code'da geçerli). Model fiyatları değişince `pricing.ts` güncellenmeli; yeni modeller (opus 5 gibi) tabloda yok, kullanıcı config'e yazana kadar maliyet boş görünür. Uzun vadede fiyatları uzaktan çekmek mi gerekir, yoksa sürümle göndermek yeterli mi?
