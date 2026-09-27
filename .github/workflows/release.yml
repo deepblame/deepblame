@@ -13,7 +13,9 @@ on:
 
 permissions:
   contents: read
-  # Lets npm record where the package was built from (provenance).
+  # Trusted publishing: npm trades this token for a short-lived credential, so
+  # there is no long-lived secret to leak, and it records where the package was
+  # built from.
   id-token: write
 
 jobs:
@@ -28,9 +30,16 @@ jobs:
           cache: pnpm
           registry-url: https://registry.npmjs.org
       - run: pnpm install --frozen-lockfile
+
       # The same gate as CI: nothing reaches npm that has not passed it.
       - run: pnpm check
       - run: pnpm smoke
-      - run: pnpm --filter deepblame publish --access public --no-git-checks --tag ${{ inputs.tag }}
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # Trusted publishing lives in the npm CLI, and needs 11.5.1 or newer.
+      # pnpm has no part in it, so pnpm builds the tarball — which is what
+      # resolves the workspace: protocol — and npm is what sends it.
+      - run: npm install --global npm@latest
+      - run: npm --version
+      - run: pnpm --filter deepblame pack --pack-destination "$RUNNER_TEMP"
+      - name: Publish
+        run: npm publish "$RUNNER_TEMP"/deepblame-*.tgz --access public --tag "${{ inputs.tag }}"
