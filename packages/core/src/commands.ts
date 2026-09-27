@@ -30,10 +30,12 @@ import {
   type HookFile,
 } from './hooks';
 import { createGenesis, readLedger, type LedgerState } from './ledger';
+import { reportRange, type ReportResult } from './report';
 import { openRepo, type Repo } from './repo';
 import { applyRevert, planRevert, type RevertPlan } from './revert';
 import { findRun, indexedRuns, listRuns, type LedgerRun } from './runs';
 import { appendRuns, seal, type SealResult } from './seal';
+import { pullLedger, pushLedger, type ShareResult } from './share';
 import { ensureStateDir, readStateDir, type StateDirInfo } from './state';
 import { markWorktree, recordWorktreeTurn } from './worktree';
 
@@ -438,6 +440,48 @@ export function gc(cwd: string, options: CommandOptions & GcOptions = {}): GcRep
   const initialized = readLedger(repo).head !== null && readStateDir(repo.root).exists;
   const plan = collect(repo, { days: options.days, apply: options.apply, now: options.now });
   return { repo, plan, initialized };
+}
+
+export interface PrReport {
+  repo: Repo;
+  initialized: boolean;
+  result: ReportResult | null;
+}
+
+/** Who wrote the lines this change touches. For a pull request comment. */
+export function report(cwd: string, base: string, options: CommandOptions & { head?: string } = {}): PrReport {
+  const repo = openRepo(cwd);
+  const initialized = readLedger(repo).head !== null && readStateDir(repo.root).exists;
+  if (!initialized) return { repo, initialized, result: null };
+  seal(repo, { now: options.now });
+  return { repo, initialized, result: reportRange(repo, base, options.head ?? 'HEAD') };
+}
+
+export interface ShareReport {
+  repo: Repo;
+  initialized: boolean;
+  result: ShareResult | null;
+  direction: 'push' | 'pull';
+}
+
+/**
+ * Shares the ledger with the rest of the team. Everything else in this tool
+ * answers for one machine; this is what makes the answer the team's.
+ */
+export function share(cwd: string, direction: 'push' | 'pull', options: CommandOptions & { remote?: string } = {}): ShareReport {
+  const repo = openRepo(cwd);
+  const initialized = readLedger(repo).head !== null && readStateDir(repo.root).exists;
+  if (!initialized) return { repo, initialized, result: null, direction };
+  // Anything captured but not yet sealed is not the team's business until it
+  // is a run, so fold it in first.
+  seal(repo, { now: options.now });
+  const remote = options.remote ?? 'origin';
+  return {
+    repo,
+    initialized,
+    direction,
+    result: direction === 'push' ? pushLedger(repo, remote) : pullLedger(repo, remote),
+  };
 }
 
 export interface SealReport {

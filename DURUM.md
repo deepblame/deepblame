@@ -165,9 +165,11 @@ Atıf mekanizma, satılan şey sonuç.
 deepblame/
 ├── packages/
 │   ├── protocol/     # isim sabitleri (TEK yer), Run şeması, defter meta şeması (zod) + kuyruk olay tipleri (bağımlılıksız)
-│   ├── core/         # git plumbing, defter, durum dizini, tespit, yakalama (capture), mühürleyici (seal), hook kurulumu, okuma (runs)
-│   └── cli/          # `deepblame` + `deepblame-capture` komutları, esbuild ile iki dosyaya paketlenir
+│   ├── core/         # git plumbing, defter, durum dizini, tespit, yakalama (capture), mühürleyici (seal), okuma (runs), blame, revert, share, report, doctor, gc
+│   ├── cli/          # `deepblame` + `deepblame-capture` komutları, esbuild ile iki dosyaya paketlenir
+│   └── vscode/       # VS Code eklentisi: saf karar katmanı (annotate.ts) + ince editör katmanı, core gömülü
 ├── brand/            # logo seti
+├── examples/         # pull-request-comment.yml — hazır GitHub Action
 ├── .github/workflows/ci.yml   # ubuntu + macOS + Windows × Node 22/24: tip + test + build + smoke
 ├── DURUM.md, README.md, LICENSE (Apache-2.0)
 ```
@@ -362,17 +364,43 @@ Burada yazarken bir şey keşfettim ve tasarımı değiştirdim: **blob'u en yen
 
 ### Ürünün bugünkü şekli
 
-Arayüz terminal, başka arayüz yok. Kurulum bir kere (`npx deepblame init`), sonra unutuluyor. Sorular çıktığında dört komut: `blame`, `cost`, `revert`, `doctor`.
+Kurulum bir kere (`npx deepblame init`), sonra unutuluyor. Sorular çıktığında dört komut: `blame`, `cost`, `revert`, `doctor`. Takım için `push` / `pull` / `report`. Terminale girmek istemeyen için VS Code eklentisi aynı deftere bakıyor.
 
 **Ücretsiz / ücretli çizgisi (karar 25):** kendi makinende çalışan her şey ücretsiz ve açık kaynak — bütün komutlar, bütün adaptörler, sınırsız. Ücretli olan tek şey **paylaşım**: takım defteri, web paneli, PR kontrolü, imzalı denetim raporu, SSO. Tek geliştirici paylaşıma ihtiyaç duymaz, şirket duyar; ödeyecek olan da şirket.
 
 ### Kalan eksikler (öncelik sırasıyla)
 
 1. **Sıfır dış kullanıcı.** En büyük eksik bir özellik değil. Başkasının makinesinde ne kırılıyor bilmiyoruz. Önce 10 gerçek kullanıcı, bir hafta onların takıldığı yerler.
-2. **VS Code eklentisi** — "komut yaz" yüksek eşik; editörde satırın yanında görünmesi CLI'dan sonraki en büyük benimseme kaldıracı.
-3. **Takım katmanı** — yukarıdaki ücretli kısım, hiç yok.
+2. ~~**VS Code eklentisi**~~ → yapıldı (aşağıda).
+3. ~~**Takım katmanı**~~ → `push` / `pull` / `report` yapıldı (aşağıda).
 4. Kendi üstümüzde gerçek dogfood.
-5. npm trusted publishing (yayın hâlâ elle).
+5. ~~npm trusted publishing~~ → yapıldı, 0.2.0 imzalı provenance ile yayında.
+
+### 27 Eylül (gece yarısı) — alt ajan hatası, takım defteri, PR raporu, VS Code eklentisi
+
+**Alt ajan hatası — kaydın ortadan bölünmesi.** Claude Code bir alt ajan (Task) çalıştırdığında `SubagentStop` geliyordu ve biz onu turun bitişi sayıp defteri mühürlüyorduk. Oysa alt ajanın bitmesi, turun bitmesi değil: asıl tur devam ediyor ve geri kalan düzenlemeleri **ikinci bir run** olarak kaydediliyordu. Yani alt ajan kullanan her turda kayıt ikiye bölünüyor, `blame` aynı işi iki farklı run'a dağıtıyordu. Düzeltme tek satır — `SubagentStop` (ve Cursor'daki `subagentStop`) artık hiçbir şey yapmıyor, sadece `Stop` / `SessionEnd` mühürlüyor. İki test: bir turun bir tur olarak kaldığını ve Task ile Edit çağrılarının ikisinin de aynı run'a düştüğünü kanıtlıyor.
+
+**Takım defteri (`packages/core/src/share.ts`).** Defter bir git ref'i olduğu için paylaşımı git'in zaten iyi yaptığı şey: `push` ve `pull`.
+
+Tasarımın can alıcı kısmı birleştirme. İki defteri, ikisindeki bütün girdileri alarak birleştiriyoruz, çünkü **çakışma yapısı gereği imkânsız**: bir run kaydının yolu kendi uuid'si ve kayıt yazıldıktan sonra asla değişmiyor; saklanan dosya içeriğinin yolu ise içeriğinin hash'i. Dolayısıyla iki makine aynı yola farklı bir şey yazamaz. Yazarsa bu bir hata ya da kurcalanmış defterdir: o zaman yereldeki korunuyor ve durum açıkça söyleniyor — sessizce bir taraf seçilmiyor.
+
+Tek istisna defterin kendi künyesi (`meta.json`): iki kişi ayrı ayrı `init` çalıştırdığı için her defter kendi doğum tarihini taşıyor. Birleştirmede **erken olan** korunuyor, çünkü bu kaydın başladığı an odur. Bunu birim testler değil, iki klon ve bir çıplak depo ile yapılan **gerçek deneme** yakaladı: ilk hâli bunu "imkânsız çakışma" diye rapor ediyordu.
+
+Kritik olan şu: **içerikler de gidiyor.** `pull` sonrası karşı makine iş arkadaşının run'ını sadece görmüyor, üzerinde `blame` ve `revert` de yapabiliyor. 8 test, biri tam bunu kanıtlıyor.
+
+**PR raporu (`packages/core/src/report.ts` + `examples/pull-request-comment.yml`).** Bir dalın ne kadarını ajan yazmış: `merge-base`, sonra `--unified=0` ile **sadece bu değişikliğin dokunduğu satırlar**, sonra blame aralıklarıyla kesişim. Bütün dosyayı blame'lemek haftalar önce incelenmiş işi rapor etmek olurdu. `--markdown` yorum biçimini veriyor; Action kendi önceki yorumunu güncelliyor, her push'ta yenisini eklemiyor. Gerçek bir dalda doğrulandı.
+
+**VS Code eklentisi (`packages/vscode`).** Ajanın yazdığı her satırın solunda yeşil işaret (kaydırma çubuğunda da, uzun dosyanın şeklini görmek için), imlecin olduğu satırın sonunda ajan adı + istem, üstüne gelince model, maliyet, ne kadar emin olduğu ve **o run'ı geri alan bağlantı** (önce planı gösteriyor, onay olmadan hiçbir şey yazılmıyor).
+
+İki karar:
+- **Çekirdek pakete gömülü, CLI'ya kabuk çağrısı yapmıyor.** Açılan her dosyada `npx deepblame` başlatmak defteri okumaktan pahalıya gelirdi. Ayrıca CLI'nın kurulu olmadığı depoda da çalışıyor.
+- **Kaydedilmemiş düzenlemede işaretler kayıyor, dokunulan satırdaki işaret bırakılıyor.** Blame diskteki dosyayı okuyor; biri yazmaya başladığı an tampon ile cevap ayrışıyor. İşaretleri dondurmak ya da daha kötüsü altından kayan satırı göstermeye devam etmek yerine, her değişiklik altındaki satırları kaydırıyor ve dokunulan satırı bırakıyor: elle düzenlenen satır artık kanıtlanabilir şekilde ajanın değil. Bu, ürünün göze alamayacağı tek hata. Bırakılan işaret kayıtta sıra gelince geri geliyor.
+
+**Test edilebilirlik.** Eklenti buradan bir editörde çalıştırılamıyor, o yüzden tersten test edildi: `test/fake-editor.ts` editörün yerine geçiyor, ne çizilmesinin istendiğini kaydediyor, testler de **gerçek eklentiyi gerçek bir depo ve gerçek bir defter** üzerinde sürüyor — 53 test (38 saf mantık, 15 uçtan uca). Kasıtlı bir birim hatası (0 tabanlı satır dönüşümünü bozmak) sekiz testi düşürüyor, yani testler gerçekten tutuyor. Derlenmiş paket ayrıca `vscode` modülü dışarıdan verilerek node'da yüklendi: `activate` çalışıyor, dört komut kaydoluyor, `deactivate` temiz çıkıyor.
+
+`.vsix` paketlendi (7 dosya, 66 KB). **Doğrulanamayan tek şey görünüm:** yeşilin temada nasıl durduğu, hover kutusunun nereye düştüğü, uzun satırın sonunda notun nasıl göründüğü. Kuran ilk kişi söyleyecek.
+
+**Testler:** 214. `pnpm check` geçiyor.
 
 ## 17. Açık sorular
 

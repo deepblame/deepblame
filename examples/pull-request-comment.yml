@@ -1,0 +1,63 @@
+# Comments on every pull request with which agent wrote the lines it touches.
+#
+# Copy this into .github/workflows/ in your own repository. It needs nothing
+# but the ledger, which it fetches from the same remote everyone pushes to
+# with `deepblame push`.
+#
+# If nobody on the team pushes their ledger yet, the comment simply says that
+# nothing is on record, which is honest and costs a few seconds.
+
+name: who wrote this
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  # Needed to leave the comment.
+  pull-requests: write
+
+jobs:
+  attribute:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # blame follows lines through history, so it needs the history.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # The ledger lives in its own ref, which a normal checkout does not
+      # fetch. This is the whole integration.
+      - name: Fetch the ledger
+        run: git fetch --no-tags origin '+refs/deepblame/ledger:refs/deepblame/ledger' || echo "no ledger on this remote yet"
+
+      - name: Work out who wrote it
+        id: report
+        run: |
+          npx --yes deepblame@latest report \
+            --base "origin/${{ github.base_ref }}" \
+            --markdown > report.md
+          cat report.md
+
+      - name: Say so on the pull request
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = require('node:fs').readFileSync('report.md', 'utf8');
+            const marker = '<!-- deepblame -->';
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+
+            // Replace our own previous comment rather than adding another one
+            // to every push.
+            const existing = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number });
+            const mine = existing.find((comment) => comment.body.startsWith(marker));
+            const payload = `${marker}\n${body}`;
+
+            if (mine) await github.rest.issues.updateComment({ owner, repo, comment_id: mine.id, body: payload });
+            else await github.rest.issues.createComment({ owner, repo, issue_number, body: payload });

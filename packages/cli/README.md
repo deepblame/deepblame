@@ -42,6 +42,30 @@ npx deepblame cost --days 7
 
 Tokens and money, per turn, per model, per agent, read from the agent's own session log. Where the agent reports its own price, that figure is used instead of ours. A model with no known rate is left blank rather than guessed at.
 
+## Your whole team, one record
+
+```sh
+npx deepblame push        # send your runs to the team
+npx deepblame pull        # take in everyone else's
+```
+
+The ledger is a git ref, so sharing it is what git already does well. Joining two ledgers cannot conflict by construction: a run's path is its own id and never changes, and stored file contents are keyed by their hash. The contents travel too, so after a `pull` you can blame *and* revert a colleague's agent from your own machine.
+
+## Who wrote this pull request
+
+```sh
+npx deepblame report --base origin/main
+```
+
+```
+50% of this change was written by agents  14 of 28 lines
+
+  claude-code   11 lines   2 runs
+  cursor         3 lines   1 run
+```
+
+Only the lines the change touches are counted, so nothing that was reviewed weeks ago is counted again. `--markdown` gives the comment version; the repository has a drop-in GitHub Action that posts it on every pull request.
+
 ## Which tools are covered
 
 | Tool | How | What you get |
@@ -65,6 +89,9 @@ Any other tool can report with one JSON object per call on stdin — no SDK, no 
 | `deepblame blame <file>` | Which agent wrote each line, and how sure we are |
 | `deepblame cost` | What the agents spent, by model and by agent |
 | `deepblame revert` | Undo one agent's work and nobody else's |
+| `deepblame report` | How much of a branch or pull request an agent wrote |
+| `deepblame push` | Send this machine's runs to the team's remote |
+| `deepblame pull` | Take in the team's runs and fold them into yours |
 | `deepblame doctor` | Check recording is working, and say what to fix |
 | `deepblame gc` | Age old file contents out of the ledger |
 | `deepblame seal` | Fold captured events into the ledger now |
@@ -80,6 +107,8 @@ Any other tool can report with one JSON object per call on stdin — no SDK, no 
 
 Not recording? `deepblame doctor` says why, and what to do about it.
 
-**Status: pre-alpha, and already useful.** Recording, blame, cost and revert all work today.
+There is also a VS Code extension over the same ledger — the agent and the prompt beside the line, and undo from the hover. It is in the repository, not on the Marketplace yet.
+
+**Status: pre-alpha, and already useful.** Recording, blame, cost, revert, team sharing and pull request reports all work today.
 
 [Source and full documentation](https://github.com/deepblame/deepblame) · [deepblame.com](https://deepblame.com) · Apache-2.0

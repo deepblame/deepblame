@@ -69,6 +69,8 @@ export {
 } from './diffmap';
 export { diagnose, type Check, type CheckStatus, type DoctorOptions, type DoctorReport } from './doctor';
 export { collect, type GcOptions, type GcPlan } from './gc';
+export { NoLedgerError, pullLedger, pushLedger, shareError, type ShareResult } from './share';
+export { reportRange, type AgentShare, type FileShare, type ReportResult } from './report';
 export { runFromCommit } from './gitrun';
 export { appendRuns } from './seal';
 export { markWorktree, recordWorktreeTurn, type TurnOptions } from './worktree';
@@ -99,8 +101,10 @@ export {
   log,
   recordCommit,
   recordTurn,
+  report,
   revert,
   sealNow,
+  share,
   show,
   status,
   type BlameOptions,
@@ -119,9 +123,11 @@ export {
   type LogReport,
   type RecordCommitReport,
   type RecordTurnOptions,
+  type PrReport,
   type RevertOptions,
   type RevertReport,
   type SealReport,
+  type ShareReport,
   type ShowOptions,
   type ShowReport,
   type StatusReport,

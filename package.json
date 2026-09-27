@@ -7,7 +7,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "pnpm --filter deepblame build",
+    "build": "pnpm --filter deepblame build && pnpm --filter deepblame-vscode build",
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run",
     "check": "pnpm typecheck && pnpm test && pnpm build",

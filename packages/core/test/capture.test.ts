@@ -418,3 +418,62 @@ describe('hooks', () => {
     expect(skipped.hooks).toEqual([]);
   });
 });
+
+describe('subagents', () => {
+  it('keeps the turn open when a subagent finishes', () => {
+    const root = makeRepo({ commits: true });
+    init(root, { now: T0 });
+    const file = join(root, 'app.ts');
+
+    feed(root, { hook_event_name: 'UserPromptSubmit', prompt: 'refactor the upload path' }, T0);
+    // The main agent farms a piece of the work out.
+    feed(
+      root,
+      {
+        hook_event_name: 'PostToolUse',
+        tool_name: 'Task',
+        tool_input: { description: 'find the callers' },
+        tool_response: {},
+      },
+      T1,
+    );
+    feed(root, { hook_event_name: 'SubagentStop' }, T1);
+    // ...and carries on afterwards. This is the part that used to be lost.
+    feed(root, { hook_event_name: 'PreToolUse', tool_name: 'Edit', tool_input: { file_path: file } }, T1);
+    writeFileSync(file, 'export const answer = 43;\n');
+    feed(
+      root,
+      {
+        hook_event_name: 'PostToolUse',
+        tool_name: 'Edit',
+        tool_input: { file_path: file, old_string: '42', new_string: '43' },
+        tool_response: {},
+      },
+      T1,
+    );
+    feed(root, { hook_event_name: 'Stop' }, T2);
+    seal(openRepo(root), { now: T2 });
+
+    const runs = listRuns(openRepo(root));
+    // One turn, not two: the subagent did not end it.
+    expect(runs).toHaveLength(1);
+    const run = runs[0]?.run;
+    expect(run?.task.intent).toBe('refactor the upload path');
+    expect(run?.tool_calls.map((call) => call.name)).toEqual(['Task', 'Edit']);
+    expect(run?.files_written.map((written) => written.path)).toEqual(['app.ts']);
+  });
+
+  it('records nothing at all for the subagent event itself', () => {
+    const root = makeRepo({ commits: true });
+    init(root, { now: T0 });
+    const context = openCapture(root);
+    if (context === null) throw new Error('not set up');
+    const result = captureClaudeCode(
+      { session_id: SESSION, cwd: root, hook_event_name: 'SubagentStop' },
+      context,
+      T0,
+    );
+    expect(result.events).toHaveLength(0);
+    expect(result.seal).toBe(false);
+  });
+});

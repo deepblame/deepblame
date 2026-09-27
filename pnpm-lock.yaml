@@ -42,6 +42,19 @@ importers:
         specifier: ^4.6.5
         version: 4.6.5
 
+  packages/vscode:
+    dependencies:
+      '@deepblame/core':
+        specifier: workspace:*
+        version: link:../core
+      '@deepblame/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+    devDependencies:
+      '@types/vscode':
+        specifier: ^1.90.0
+        version: 1.138.0
+
 packages:
 
   '@esbuild/aix-ppc64@0.28.2':
@@ -317,6 +330,9 @@ packages:
 
   '@types/node@26.6.2':
     resolution: {integrity: sha512-X1P21scMv4zGKLYqjdGjaKa7COa0RKVYYZZN/NfvLQ1JegxFhdhpZG/Lyn8AXx6CDUavKAd11v6BvfpkDByK8g==}
+
+  '@types/vscode@1.138.0':
+    resolution: {integrity: sha512-DhlvrucJa8n6EHst7qQcXOcjLKs/VRTQy55plLO+RN74jonYsr/t9dd66zBnAyz1tpDig0okQAxuoPHpVNje2g==}
 
   '@typescript/typescript-aix-ppc64@7.0.2':
     resolution: {integrity: sha512-MTKKkWB7p/0E9xi1d1tHtZ5PiLkGEMIq88pK2CubZjOsLtYTLqhgIgi6zepFa+9GHZ6h05NMCkQxGKiPXMxXtQ==}
@@ -866,6 +882,8 @@ snapshots:
   '@types/node@26.6.2':
     dependencies:
       undici-types: 8.9.0
+
+  '@types/vscode@1.138.0': {}
 
   '@typescript/typescript-aix-ppc64@7.0.2':
     optional: true

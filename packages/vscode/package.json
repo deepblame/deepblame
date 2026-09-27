@@ -1,0 +1,116 @@
+{
+  "name": "deepblame-vscode",
+  "displayName": "DeepBlame",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Shows which AI agent wrote each line, and why, beside the code.",
+  "publisher": "deepblame",
+  "license": "Apache-2.0",
+  "icon": "icon.png",
+  "galleryBanner": {
+    "color": "#0B1220",
+    "theme": "dark"
+  },
+  "keywords": [
+    "ai",
+    "blame",
+    "provenance",
+    "claude",
+    "cursor"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/deepblame/deepblame.git",
+    "directory": "packages/vscode"
+  },
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "SCM Providers",
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./dist/extension.cjs",
+  "contributes": {
+    "commands": [
+      {
+        "command": "deepblame.toggle",
+        "title": "DeepBlame: Show or hide who wrote each line"
+      },
+      {
+        "command": "deepblame.explainLine",
+        "title": "DeepBlame: Explain this line"
+      },
+      {
+        "command": "deepblame.undoRun",
+        "title": "DeepBlame: Undo this run"
+      },
+      {
+        "command": "deepblame.showRun",
+        "title": "DeepBlame: Show everything this run did"
+      }
+    ],
+    "configuration": {
+      "title": "DeepBlame",
+      "properties": {
+        "deepblame.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Annotate lines an agent wrote."
+        },
+        "deepblame.command": {
+          "type": "string",
+          "default": "npx --yes deepblame",
+          "description": "How to run the DeepBlame CLI."
+        }
+      }
+    },
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "deepblame.undoRun",
+          "when": "false"
+        },
+        {
+          "command": "deepblame.showRun",
+          "when": "false"
+        }
+      ]
+    },
+    "colors": [
+      {
+        "id": "deepblame.agentLine",
+        "description": "The mark beside a line an agent wrote.",
+        "defaults": {
+          "dark": "#31DB8E",
+          "light": "#1FA96B",
+          "highContrast": "#31DB8E",
+          "highContrastLight": "#127048"
+        }
+      },
+      {
+        "id": "deepblame.annotation",
+        "description": "The text at the end of the line saying who wrote it.",
+        "defaults": {
+          "dark": "editorCodeLens.foreground",
+          "light": "editorCodeLens.foreground",
+          "highContrast": "editorCodeLens.foreground",
+          "highContrastLight": "editorCodeLens.foreground"
+        }
+      }
+    ]
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs"
+  },
+  "dependencies": {
+    "@deepblame/core": "workspace:*",
+    "@deepblame/protocol": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.90.0"
+  }
+}

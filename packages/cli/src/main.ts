@@ -15,8 +15,10 @@ import {
   log,
   recordCommit,
   recordTurn,
+  report,
   revert,
   sealNow,
+  share,
   show,
   status,
   type HookAgent,
@@ -33,7 +35,9 @@ import {
   formatHooks,
   formatInit,
   formatLog,
+  formatReport,
   formatRevert,
+  formatShare,
   formatSeal,
   formatShow,
   formatStatus,
@@ -67,6 +71,9 @@ Usage
   ${CLI_NAME} blame <file>     which agent wrote each line, and how sure we are
   ${CLI_NAME} cost             what the agents spent, by model and agent
   ${CLI_NAME} revert           undo one agent's work and nobody else's
+  ${CLI_NAME} report --base <r> who wrote the lines this change touches
+  ${CLI_NAME} push             send the ledger to the team's remote
+  ${CLI_NAME} pull             take in the team's ledger and join it
   ${CLI_NAME} doctor           check that recording is actually working
   ${CLI_NAME} gc               age old file contents out of the ledger
   ${CLI_NAME} seal             fold captured events into the ledger now
@@ -89,6 +96,9 @@ Options
   --local         keep hooks in .claude/settings.local.json, uncommitted
   --no-hooks      set up without touching your agent's settings
   --no-seal       list only what is already in the ledger
+  --base <ref>    what to compare against in report
+  --remote <name> which remote to share the ledger with (default origin)
+  --markdown      report as markdown, for a pull request comment
   --json          machine-readable output
   -h, --help      show this help
   -v, --version   print the version
@@ -111,6 +121,10 @@ export function main(argv: readonly string[], io: Io): number {
         days: { type: 'string' },
         hours: { type: 'string' },
         why: { type: 'string' },
+        base: { type: 'string' },
+        head: { type: 'string' },
+        remote: { type: 'string' },
+        markdown: { type: 'boolean' },
         run: { type: 'string', multiple: true },
         apply: { type: 'boolean' },
         conflicts: { type: 'boolean' },
@@ -228,6 +242,19 @@ export function main(argv: readonly string[], io: Io): number {
         // rather than crashes, but a script has to be able to tell.
         if (report.plan !== null && report.initialized && report.plan.runs.length === 0) return EXIT.failure;
         if (report.plan?.applied === true && report.plan.skipped.length > 0) return EXIT.failure;
+        return EXIT.ok;
+      }
+      case 'report': {
+        if (values.base === undefined) return usageError(io, `${CLI_NAME} report needs --base <ref>`);
+        const built = report(cwd, values.base, { env: io.env, head: values.head });
+        if (values.json) io.stdout(toJson(built.result));
+        else io.stdout(formatReport(built, style, values.markdown === true));
+        return EXIT.ok;
+      }
+      case 'push':
+      case 'pull': {
+        const shared = share(cwd, command, { env: io.env, remote: values.remote });
+        io.stdout(values.json ? toJson(shared.result) : formatShare(shared, style));
         return EXIT.ok;
       }
       case 'doctor': {

@@ -175,8 +175,15 @@ export function captureClaudeCode(payload: unknown, context: CaptureContext, now
       return { events, seal: false };
     }
 
-    case 'Stop':
+    // A subagent finishing is not the turn finishing. Sealing here cut the
+    // parent turn in half: everything the main agent did afterwards landed in
+    // a second run with no prompt attached to it. The subagent's own work is
+    // already on the record — the Task call that started it is a tool call
+    // like any other — so this event needs nothing from us but to be ignored.
     case 'SubagentStop':
+      return none;
+
+    case 'Stop':
     case 'SessionEnd':
       return {
         events: [{ ...base, k: 'end', reason: asString(payload['reason']) ?? event.toLowerCase() }],
@@ -415,9 +422,12 @@ export function captureCursor(payload: unknown, context: CaptureContext, now: Da
       };
     }
 
+    // As above: a subagent stopping leaves the turn running.
+    case 'subagentStop':
+      return none;
+
     case 'stop':
     case 'sessionEnd':
-    case 'subagentStop':
       return {
         events: [{ ...base, k: 'end', reason: asString(payload['status']) ?? asString(payload['reason']) ?? 'stop' }],
         seal: true,

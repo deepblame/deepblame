@@ -156,6 +156,46 @@ revert     the retry loop is gone, your rename is still there
 
 A plain three-way merge cannot do that — two changes on adjacent lines conflict. DeepBlame has something git does not: a record of which lines belong to the agent.
 
+## One ledger for the team
+
+Until you share it, the record of who wrote what lives on the machine that watched it happen, which answers the question for you and nobody else. The ledger is a git ref, so sharing it is the thing git is already good at:
+
+```sh
+npx deepblame push        # send your runs to the team
+npx deepblame pull        # take in everyone else's
+```
+
+```
+Sent the ledger to origin.
+  12 runs, 3 came in from the team first.
+```
+
+Joining two ledgers cannot conflict, and that is by design rather than by luck: a run record's path is its own uuid and the record never changes once written, and a stored file's content is keyed by its own hash. Two machines therefore never write different things to the same path. If one ever does, DeepBlame keeps what is local and tells you, rather than quietly picking a side.
+
+The file contents travel too, which is what makes this more than a report: after a `pull`, `blame` and `revert` both work on your colleague's runs from your own machine.
+
+## Who wrote this pull request
+
+```sh
+npx deepblame report --base origin/main
+```
+
+```
+50% of this change was written by agents  14 of 28 lines
+
+  claude-code   11 lines   2 runs
+  cursor         3 lines   1 run
+
+  src/upload.ts   9 of 14 lines
+  src/index.ts    5 of 14 lines
+```
+
+Only the lines the change actually touches are counted; blaming whole files would report work that was reviewed weeks ago. `--markdown` gives the version for a comment, and `examples/pull-request-comment.yml` is a drop-in GitHub Action that posts it on every pull request and replaces its own previous comment rather than piling up.
+
+## In your editor
+
+`packages/vscode` is a VS Code extension over the same ledger: a mark down the left edge of every line an agent wrote, the agent and the prompt at the end of the line your cursor is on, and on hover the model, the cost, how sure the answer is and a link that undoes that run after showing you the plan. Build it with `pnpm --filter deepblame-vscode build`; see its own README for installing the `.vsix`.
+
 ## What `init` does, and what it never does
 
 - Creates the ledger as a separate git ref, `refs/deepblame/ledger`. It is never checked out, so your branches, working tree and index stay exactly as they were.
@@ -247,12 +287,15 @@ One thing it has to say out loud: releasing a blob for real means the ledger's c
 | `deepblame blame <file>` | Which agent wrote each line, with a confidence you can check |
 | `deepblame cost` | What the agents spent, by model and by agent |
 | `deepblame revert` | Undo one agent's work and nobody else's |
+| `deepblame report` | How much of a branch or pull request an agent wrote |
+| `deepblame push` | Send this machine's runs to the team's remote |
+| `deepblame pull` | Take in the team's runs and fold them into yours |
 | `deepblame doctor` | Check that recording is actually working, and say what to fix |
 | `deepblame gc` | Age old file contents out of the ledger |
 | `deepblame seal` | Fold captured events into the ledger now |
 | `deepblame hooks <action>` | `install`, `uninstall` or `status` for capture hooks |
 
-Options: `-C <dir>` runs as if started in another directory, `--limit <n>` bounds `log`, `--days <n>` bounds `cost`, `--why <line>` explains one line in `blame`, `--run <id>` / `--agent <name>` / `--hours <n>` choose what `revert` undoes, `--apply` makes `revert` write, `--json` prints machine-readable output, `--no-seal` lists only what is already in the ledger.
+Options: `-C <dir>` runs as if started in another directory, `--limit <n>` bounds `log`, `--days <n>` bounds `cost`, `--why <line>` explains one line in `blame`, `--run <id>` / `--agent <name>` / `--hours <n>` choose what `revert` undoes, `--apply` makes `revert` write, `--base <ref>` / `--head <ref>` set what `report` compares and `--markdown` formats it for a comment, `--remote <name>` picks where `push` and `pull` go, `--json` prints machine-readable output, `--no-seal` lists only what is already in the ledger.
 
 ## Roadmap
 
@@ -261,7 +304,9 @@ Options: `-C <dir>` runs as if started in another directory, `--limit <n>` bound
 3. **`deepblame blame`** — line-by-line provenance with a confidence score you can check. *Done.* It survives edits elsewhere in the file, follows a file through renames, keeps the line when a formatter reindents the whole file (at a lower confidence, and it says so), and keeps the right owner when several agents and a person touch one file.
 4. **`deepblame revert`** — undo one agent's work and nobody else's, three-way against the lines the ledger says were theirs, with conflicts shown before anything is written. *Done.*
 5. **Housekeeping** — `doctor` accounts for the tool's own silence, `gc` keeps the ledger from growing forever. *Done.*
-6. **Next**: a team ledger — pushing runs to a shared remote, PR checks that say which agent wrote a diff, and signed audit reports.
+6. **A team ledger** — `push` and `pull` join two ledgers without a possible conflict, file contents included, so blame and revert work on a colleague's runs. `report` says how much of a branch an agent wrote, and a drop-in Action comments it on every pull request. *Done.*
+7. **In the editor** — a VS Code extension over the same ledger, in `packages/vscode`. *Done, though how it looks has only been judged by the people who have installed it.*
+8. **Next**: real users. The biggest gap is no longer a feature — it is that nobody outside this repository has run it yet. After that, signed audit reports and a hosted panel for teams that want the record off their laptops.
 
 ## Development
 
@@ -271,7 +316,9 @@ pnpm check      # typecheck, tests and build
 pnpm smoke      # packs the CLI and records a turn in a throwaway repository
 ```
 
-The repository is a pnpm workspace: `packages/protocol` holds the event schema and the product name constants, `packages/core` the git plumbing, capture, sealer, blame and revert, and `packages/cli` the commands, bundled by esbuild into two dependency-free files — the CLI, and the capture hot path as CommonJS because node's ESM loader costs about 20ms of somebody else's turn.
+The repository is a pnpm workspace: `packages/protocol` holds the event schema and the product name constants, `packages/core` the git plumbing, capture, sealer, blame, revert, sharing and reporting, `packages/cli` the commands, bundled by esbuild into two dependency-free files — the CLI, and the capture hot path as CommonJS because node's ESM loader costs about 20ms of somebody else's turn — and `packages/vscode` the editor extension, which bundles core rather than shelling out to the CLI.
+
+The extension cannot be started from a terminal, so it is tested the other way round: `packages/vscode/test/fake-editor.ts` stands in for the editor and records what it was told to draw, and the tests drive the real extension against a real repository and a real ledger. That covers the wiring; it does not cover appearance.
 
 Reading the ledger goes through a cache in `.deepblame/`, so `blame` on one file does not parse a thousand run records. It is only a cache: delete it and the next command rebuilds it from the ledger, which stays the only source of truth.
 

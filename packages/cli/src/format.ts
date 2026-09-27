@@ -12,7 +12,9 @@ import type {
   DoctorReport,
   GcReport,
   LogReport,
+  PrReport,
   RevertReport,
+  ShareReport,
   SealResult,
   StatusReport,
 } from '@deepblame/core';
@@ -514,6 +516,98 @@ function bytes(count: number): string {
   if (count < 1024) return `${count} B`;
   if (count < 1024 * 1024) return `${(count / 1024).toFixed(0)} KB`;
   return `${(count / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+export function formatShare(report: ShareReport, s: Style): string {
+  if (!report.initialized) {
+    return lines(`${PRODUCT_NAME} is not set up here: ${report.repo.root}`, `Run ${s.bold(`${CLI_NAME} init`)} to start.`);
+  }
+  const result = report.result;
+  if (result === null) return lines('Nothing to share.');
+  const rows: string[] = [];
+
+  if (report.direction === 'push') {
+    rows.push(
+      result.gained > 0
+        ? `Sent the ledger to ${s.bold(result.remote)}, after taking in ${plural(result.gained, 'run')} from it.`
+        : `Sent the ledger to ${s.bold(result.remote)}.`,
+    );
+  } else if (result.unchanged) {
+    rows.push(`Already in step with ${s.bold(result.remote)}.`);
+  } else if (result.gained > 0) {
+    rows.push(`${s.green(plural(result.gained, 'run'))} came in from ${s.bold(result.remote)}.`);
+  } else {
+    rows.push(`Nothing new from ${s.bold(result.remote)}.`);
+  }
+
+  if (report.direction === 'pull' && result.ahead > 0) {
+    rows.push(s.dim(`${plural(result.ahead, 'run')} here that they do not have. ${CLI_NAME} push sends them.`));
+  }
+  if (result.disputed.length > 0) {
+    rows.push(
+      '',
+      `${s.bold('Two ledgers disagree about the same entry.')} This should not be possible: a run is`,
+      'keyed by its own id and never rewritten, and stored contents are keyed by their hash.',
+      `What is here was kept. ${plural(result.disputed.length, 'entry')}: ${result.disputed.slice(0, 5).join(', ')}`,
+    );
+  }
+  return lines(...rows);
+}
+
+export function formatReport(report: PrReport, s: Style, markdown = false): string {
+  if (!report.initialized) {
+    return lines(`${PRODUCT_NAME} is not set up here: ${report.repo.root}`, `Run ${s.bold(`${CLI_NAME} init`)} to start.`);
+  }
+  const result = report.result;
+  if (result === null || result.changed === 0) {
+    return markdown ? `No lines changed between \`${result?.base ?? ''}\` and HEAD.\n` : lines('No lines changed.');
+  }
+  const share = Math.round((result.byAgents / result.changed) * 100);
+  return markdown ? asMarkdown(result, share) : asText(result, share, s);
+}
+
+function asText(result: NonNullable<PrReport['result']>, share: number, s: Style): string {
+  const rows = [
+    `${s.bold(`${share}% of this change was written by agents`)}  ${s.dim(`${result.byAgents} of ${plural(result.changed, 'line')}`)}`,
+    '',
+  ];
+  for (const agent of result.agents) {
+    rows.push(`  ${pad(agent.agent, 12)}  ${pad(plural(agent.lines, 'line'), 10)}  ${s.dim(agent.runs.map((run) => run.intent ?? run.id).join('; '))}`);
+  }
+  if (result.files.length > 0) {
+    rows.push('', `  ${s.bold('by file')}`);
+    const width = Math.max(...result.files.map((file) => file.path.length));
+    for (const file of result.files) {
+      rows.push(`    ${pad(file.path, width)}  ${s.dim(`${file.byAgents} of ${file.changed}`)}`);
+    }
+  }
+  if (result.skipped > 0) rows.push('', s.dim(`${plural(result.skipped, 'file')} could not be read.`));
+  return lines(...rows);
+}
+
+/** For a pull request comment, so it has to read well on its own. */
+function asMarkdown(result: NonNullable<PrReport['result']>, share: number): string {
+  const out: string[] = [
+    `### ${share}% of this change was written by AI agents`,
+    '',
+    `${result.byAgents} of ${plural(result.changed, 'line')} this pull request touches.`,
+    '',
+  ];
+  if (result.agents.length > 0) {
+    out.push('| Agent | Lines | What it was asked to do |', '| --- | --- | --- |');
+    for (const agent of result.agents) {
+      const asked = agent.runs.map((run) => (run.intent === null ? `\`${run.id}\`` : run.intent)).join('<br>');
+      out.push(`| \`${agent.agent}\` | ${agent.lines} | ${asked || '—'} |`);
+    }
+    out.push('');
+  }
+  if (result.files.length > 0) {
+    out.push('<details><summary>By file</summary>', '', '| File | Agent lines | Changed |', '| --- | --- | --- |');
+    for (const file of result.files) out.push(`| \`${file.path}\` | ${file.byAgents} | ${file.changed} |`);
+    out.push('', '</details>', '');
+  }
+  out.push(`<sub>A line is counted only when it can be traced to the run that wrote it. [${PRODUCT_NAME}](https://deepblame.com)</sub>`);
+  return `${out.join('\n')}\n`;
 }
 
 export function formatHooks(report: HooksReport, s: Style): string {
