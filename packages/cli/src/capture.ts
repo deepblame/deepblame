@@ -1,5 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { appendEvents, captureClaudeCode, captureCursor, captureEvent, openCapture } from '@deepblame/core/capture';
+// The names module only, never the barrel: the barrel pulls in the schema
+// library, and this bundle is parsed on every single tool call.
+import { CLI_NAME } from '@deepblame/protocol/names';
 
 /**
  * The hook entry point. It runs on every agent tool call, so it loads only
@@ -61,7 +64,9 @@ function sealInBackground(io: CaptureIo, root: string): void {
     // Loaded here rather than at the top: this happens once per turn, while
     // everything above happens on every single tool call.
     const { spawn } = require('node:child_process') as typeof import('node:child_process');
-    spawn(process.execPath, [entry, 'seal', '-C', root], {
+    const cli = sealer(entry);
+    if (cli === null) return;
+    spawn(process.execPath, [cli, 'seal', '-C', root], {
       detached: true,
       stdio: 'ignore',
       windowsHide: true,
@@ -69,6 +74,24 @@ function sealInBackground(io: CaptureIo, root: string): void {
   } catch {
     // The next `deepblame log` seals instead.
   }
+}
+
+/**
+ * The program that can actually seal.
+ *
+ * This bundle cannot: it is the hot path and holds no schema, no git and no
+ * sealer, which is the whole point of it being separate. The CLI sits beside
+ * it — in the published package and in the copy `init` puts inside the
+ * repository — so that is what gets started. Asking this file to seal, which
+ * is what happened before, quietly did nothing at all: the turn waited in the
+ * queue until the next command that seals came along.
+ */
+function sealer(entry: string): string | null {
+  const { dirname, join } = require('node:path') as typeof import('node:path');
+  const { existsSync } = require('node:fs') as typeof import('node:fs');
+  if (!/capture\.[cm]js$/.test(entry)) return entry;
+  const sibling = join(dirname(entry), `${CLI_NAME}.mjs`);
+  return existsSync(sibling) ? sibling : null;
 }
 
 function readStdin(): string | null {

@@ -37,7 +37,7 @@ import { findRun, indexedRuns, listRuns, type LedgerRun } from './runs';
 import { appendRuns, seal, type SealResult } from './seal';
 import { pullLedger, pushLedger, type ShareResult } from './share';
 import { ensureStateDir, readStateDir, type StateDirInfo } from './state';
-import { vendorCapture } from './vendor';
+import { vendorCapture, type CaptureBundle } from './vendor';
 import { markWorktree, recordWorktreeTurn } from './worktree';
 
 export interface CommandOptions {
@@ -65,7 +65,7 @@ export interface HookOptions {
    * that is certainly there rather than a name that might be on PATH. See
    * `vendor.ts` for why the difference matters more than it sounds.
    */
-  captureSource?: string | null;
+  captureSource?: CaptureBundle | string | null;
   /** The CLI version, recorded beside the copy so a stale one can be spotted. */
   version?: string | null;
 }

@@ -51,5 +51,11 @@ export const BLOBS_DIR = 'blobs';
  */
 export const BIN_DIR = 'bin';
 export const CAPTURE_FILE = 'capture.cjs';
-/** What version the copy came from, so a stale one can be spotted. */
+/**
+ * The full CLI, kept beside it. Capture writes one line and exits; turning
+ * those lines into the ledger is a second program, started in the background
+ * when a turn ends, and it has to be findable from here for the same reason.
+ */
+export const SEALER_FILE = `${CLI_NAME}.mjs`;
+/** What version the copies came from, so a stale one can be spotted. */
 export const CAPTURE_STAMP = 'capture.json';

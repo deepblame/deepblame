@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import {
@@ -23,6 +23,7 @@ import {
   share,
   show,
   status,
+  type CaptureBundle,
   type HookAgent,
   type HooksAction,
 } from '@deepblame/core';
@@ -346,7 +347,7 @@ export function main(argv: readonly string[], io: Io): number {
  * does this fall back to naming something and hoping.
  */
 function hookCommand(io: Io, root: string): string {
-  if (captureBundle(io) !== null) return `${quote(process.execPath)} ${quote(capturePath(root))}`;
+  if (captureBundle(io).capture !== null) return `${quote(process.execPath)} ${quote(capturePath(root))}`;
 
   const capture = `${CLI_NAME}-capture`;
   if (commandOnPath(capture, io.env)) return capture;
@@ -372,12 +373,27 @@ function worktreeRoot(cwd: string): string {
   }
 }
 
-/** The capture bundle shipped beside this one, when there is one. */
-function captureBundle(io: Io): string | null {
+/**
+ * The two programs shipped beside this one: the capture hot path, and this
+ * bundle itself, which is what seals when a turn ends.
+ */
+function captureBundle(io: Io): CaptureBundle {
   const entry = io.entry;
-  if (entry === undefined || entry === '') return null;
-  const sibling = entry.endsWith('.mjs') ? join(dirname(entry), 'capture.cjs') : `${entry}-capture`;
-  return existsSync(sibling) ? sibling : null;
+  if (entry === undefined || entry === '') return { capture: null };
+  // npm and npx put a shim in front of the CLI, so the name in argv is not the
+  // file. Resolving it first is what makes the pair findable: guessing from the
+  // shim's name found the capture bundle and missed the sealer entirely, and
+  // nothing said so — the turn just sat in the queue.
+  let real = entry;
+  try {
+    real = realpathSync(entry);
+  } catch {
+    // Not a link, or gone. Whatever argv gave us is the best we have.
+  }
+  const beside = dirname(real);
+  const capture = join(beside, 'capture.cjs');
+  const cli = join(beside, `${CLI_NAME}.mjs`);
+  return { capture: existsSync(capture) ? capture : null, cli: existsSync(cli) ? cli : null };
 }
 
 /**

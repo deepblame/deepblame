@@ -428,7 +428,22 @@ Yakalayıcı asla ekrana bir şey yazmaz ve her zaman 0 ile çıkar — sıcak y
 
 Ders: **yayınlanan paketi indirip kullanıcının adımlarını birebir uygulamadan "çalışıyor" denmiyor.** 228 test bu hatayı göremezdi, çünkü testler yakalayıcıyı zaten doğru yoldan çağırıyordu. Hatayı gören tek şey gerçek `npx` oldu.
 
-**Testler:** 228.
+**Sonra CI kırmızı yandı ve peşinden üç şey daha çıktı.** İlki Windows'tandı, diğer ikisini ararken bulundu:
+
+1. **Windows'ta node'un yolunda boşluk var** (`C:\Program Files\nodejs\node.exe`). `doctor`'ın komut ayrıştırıcısı boşluktan bölüyordu, yani Windows'ta sağlam duran her hook'u "bozuk" ilan ediyordu. Ayrıştırıcı artık tırnakları anlıyor. Aynı hata ikinci bir şeyi de gizliyormuş: tırnaklı komutlarda betiğin var olup olmadığı hiç kontrol edilmiyordu.
+2. **Arka planda mühürleme hiç çalışmıyormuş.** Tur bitince yakalayıcı `node <kendisi> seal` çalıştırıyordu — ama yakalayıcı mühürleyici değil, o komutu tanımıyor bile. Yani hiçbir şey olmuyordu; tur, mühürleyen bir komut (`blame`, `log`, `status`) gelene kadar kuyrukta bekliyordu. Veri kaybı yok, ama söz verilen şey olmuyordu. **Bu hata vendoring'den önce de vardı**, sadece kimse bakmamıştı. Artık CLI da yakalayıcının yanına kopyalanıyor ve mühürleyici o oluyor.
+3. **npm/npx CLI'ın önüne bir "shim" koyuyor**, yani `argv[1]` gerçek dosya değil. Kopyalanacak dosyaları isimden tahmin etmek yakalayıcıyı buluyor, mühürleyiciyi kaçırıyordu. Artık önce `realpath` ile gerçek dosyaya inip yanındakilere bakılıyor.
+
+Bir de neredeyse kaçırdığım bir şey: mühürleyiciyi bulmak için `CLI_NAME` sabitini protokol paketinin ana girişinden aldım ve **yakalayıcı paketi 20 KB'dan 208 KB'a çıktı** — barrel dosyası zod'u da içeri çekiyordu. Sıcak yolda her araç çağrısında 10 kat fazla kod. Doğrudan `@deepblame/protocol/names`'ten alınınca 20 KB'a döndü. Ölçüldü: hook gecikmesi hâlâ 31–45 ms.
+
+**Asıl kazanç `smoke`'un değişmesi.** Eskiden yakalayıcıyı doğrudan çağırıyordu — bu yüzden hiçbirini göremedi. Artık:
+- `init`'in **ayar dosyasına gerçekten yazdığı komutu** okuyup onu çalıştırıyor (bir ajan ne yapacaksa o)
+- PATH'ten **bizim bütün ikili dosyalarımızı çıkararak** çalıştırıyor (git duruyor, mühürleyicinin ona ihtiyacı var)
+- ve turun **kendi kendine mühürlendiğini** CLI'a hiç komut vermeden, doğrudan git'ten kontrol ediyor
+
+Bu üç madde birleşince, bu ailenin hataları artık her yayından önce CI'da üç işletim sisteminde yakalanıyor.
+
+**Testler:** 231. `smoke` üç kontrol daha yapıyor.
 
 ## 17. Açık sorular
 

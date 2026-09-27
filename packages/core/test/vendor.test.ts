@@ -1,13 +1,12 @@
-import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { existsSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { BIN_DIR, CAPTURE_STAMP, STATE_DIR } from '@deepblame/protocol';
 import { describe, expect, it } from 'vitest';
 import { init } from '../src/commands';
-import { diagnose } from '../src/doctor';
+import { diagnose, type Check } from '../src/doctor';
 import { installedCommands } from '../src/hooks';
 import { openRepo } from '../src/repo';
-import { capturePath, readStamp, vendorCapture } from '../src/vendor';
+import { capturePath, readStamp, sealerPath, vendorCapture } from '../src/vendor';
 import { makeRepo, scratchDir } from './helpers';
 
 /**
@@ -26,6 +25,13 @@ import { makeRepo, scratchDir } from './helpers';
  */
 
 const NOW = new Date('2026-09-28T09:00:00.000Z');
+const WINDOWS = process.platform === 'win32';
+
+/** Exactly how the CLI spells a hook command, spaces in node's path and all. */
+function hookFor(root: string): string {
+  const quote = (path: string): string => (/[\s"']/.test(path) ? `"${path}"` : path);
+  return `${quote(process.execPath)} ${quote(capturePath(root))}`;
+}
 
 /** Stands in for the capture bundle the CLI ships. */
 function bundle(text = 'console.log("capture");\n'): string {
@@ -74,6 +80,27 @@ describe('the copy the hooks call', () => {
     expect(readStamp(root).version).toBe('0.3.0');
   });
 
+  it('puts the sealer in beside it, so a turn does not wait for a command', () => {
+    const root = makeRepo({ commits: true });
+    const dir = scratchDir('dist');
+    const capture = join(dir, 'capture.cjs');
+    const cli = join(dir, 'deepblame.mjs');
+    writeFileSync(capture, 'capture\n');
+    writeFileSync(cli, 'cli\n');
+
+    vendorCapture(root, { capture, cli }, '0.3.1', NOW);
+    // Capture writes one line and exits; something else has to turn those lines
+    // into the ledger, and it has to be findable from here too.
+    expect(readFileSync(sealerPath(root), 'utf8')).toBe('cli\n');
+  });
+
+  it('still copies the capture program when the sealer is not there to copy', () => {
+    const root = makeRepo({ commits: true });
+    const result = vendorCapture(root, { capture: bundle(), cli: null }, '0.3.1', NOW);
+    expect(result.changed).toBe(true);
+    expect(existsSync(sealerPath(root))).toBe(false);
+  });
+
   it('does nothing, and says so, when there is no bundle to copy', () => {
     const root = makeRepo({ commits: true });
     const result = vendorCapture(root, null, '0.3.0', NOW);
@@ -100,7 +127,7 @@ describe('init wires the hook to the copy, not to a name', () => {
     init(root, {
       now: NOW,
       env: { PATH: '' },
-      hookCommand: `node ${capturePath(root)}`,
+      hookCommand: hookFor(root),
       captureSource: source,
       version: '0.3.0',
     });
@@ -116,7 +143,7 @@ describe('init wires the hook to the copy, not to a name', () => {
     mkdirSync(join(root, '.claude'), { recursive: true });
     const result = init(root, {
       now: NOW,
-      hookCommand: `node ${capturePath(root)}`,
+      hookCommand: hookFor(root),
       captureSource: bundle(),
     });
     // The copy must not land first and make `init` claim the directory was
@@ -162,7 +189,7 @@ describe('doctor on a hook that no longer resolves', () => {
     const source = bundle();
     init(root, {
       now: NOW,
-      hookCommand: `${process.execPath} ${capturePath(root)}`,
+      hookCommand: hookFor(root),
       captureSource: source,
       version: '0.3.0',
     });
@@ -176,7 +203,7 @@ describe('doctor on a hook that no longer resolves', () => {
     mkdirSync(join(root, '.claude'), { recursive: true });
     init(root, {
       now: NOW,
-      hookCommand: `${process.execPath} ${capturePath(root)}`,
+      hookCommand: hookFor(root),
       captureSource: bundle(),
       version: '0.3.0',
     });
@@ -184,6 +211,33 @@ describe('doctor on a hook that no longer resolves', () => {
 
     const checks = diagnose(openRepo(root), { now: NOW, hooks, env: { PATH: '' } }).checks;
     expect(checks.find((check) => check.name === 'hook')?.status).toBe('fail');
+  });
+
+  it('unpicks a command whose program has a space in its path', () => {
+    // Node lives in "C:\\Program Files\\nodejs" on Windows, so a checker that
+    // splits on spaces declares every healthy hook there broken — and one that
+    // stops at the program never notices a deleted script anywhere.
+    const home = scratchDir('Program Files');
+    const node = join(home, 'node.exe');
+    writeFileSync(node, '');
+    const root = makeRepo({ commits: true });
+    mkdirSync(join(root, '.claude'), { recursive: true });
+    const script = capturePath(root);
+    writeFileSync(
+      join(root, '.claude', 'settings.json'),
+      JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command: `"${node}" "${script}"` }] }] } }),
+    );
+    init(root, { now: NOW, noHooks: true });
+
+    const check = (): Check | undefined =>
+      diagnose(openRepo(root), { now: NOW, hooks, env: { PATH: '' } }).checks.find((one) => one.name === 'hook');
+
+    mkdirSync(join(root, STATE_DIR, BIN_DIR), { recursive: true });
+    writeFileSync(script, 'capture\n');
+    expect(check()).toBeUndefined();
+
+    rmSync(script);
+    expect(check()?.status).toBe('fail');
   });
 
   it('takes an npx command on trust rather than going to the network', () => {
@@ -196,9 +250,10 @@ describe('doctor on a hook that no longer resolves', () => {
 
   it('accepts a name that really is on PATH', () => {
     const dir = scratchDir('bin');
-    const fake = join(dir, 'deepblame-capture');
-    writeFileSync(fake, '#!/bin/sh\nexit 0\n');
-    chmodSync(fake, 0o755);
+    // Windows finds a command by extension, and PATHEXT decides which.
+    const fake = join(dir, WINDOWS ? 'deepblame-capture.cmd' : 'deepblame-capture');
+    writeFileSync(fake, WINDOWS ? '@echo off\r\n' : '#!/bin/sh\nexit 0\n');
+    if (!WINDOWS) chmodSync(fake, 0o755);
     const root = repoWithHook('deepblame-capture');
     init(root, { now: NOW, noHooks: true });
 

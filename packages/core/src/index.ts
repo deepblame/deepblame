@@ -92,7 +92,9 @@ export {
 export {
   capturePath,
   readStamp,
+  sealerPath,
   vendorCapture,
+  type CaptureBundle,
   type VendoredCapture,
   type VendorResult,
 } from './vendor';
