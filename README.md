@@ -9,9 +9,20 @@
 
 ---
 
-`git blame` tells you who committed a line. When three agents and two people work in the same repository, that is not enough. DeepBlame records which agent wrote each line, with which model and instructions, after reading which files, and lets you revert one agent's work without throwing away everyone else's.
+`git blame` tells you who committed a line. When three agents and two people work in the same repository, that is no longer the question. The question is which agent wrote this line, what it was asked to do, what it read before it did, what it cost — and how to take that one agent's work back out without losing everyone else's.
 
-> **Status: pre-alpha, and already useful.** Claude Code is recorded turn by turn; every other tool is covered at commit level. `deepblame blame` tells you which agent wrote a line and how sure it is, `deepblame cost` tells you what the agents spent. Surgical revert is next. See the [roadmap](#roadmap).
+DeepBlame records every agent turn into a ledger that lives beside your code, and answers those questions from it.
+
+- **Which agent wrote this line** — `deepblame blame`, with a confidence you can check, that holds up when the file changes around it.
+- **Why it wrote it** — the prompt behind the turn, the files it read first, the tools it ran, the model that answered.
+- **What it cost** — tokens and money, per turn, per model, per agent.
+- **Undo just that** — surgical revert of one agent's work, without touching the rest.
+
+**It works with the tools you already use.** Claude Code is recorded turn by turn; Codex turn by turn through its own notifier; everything else — Cursor, Copilot, Windsurf, a cloud agent that opens a pull request — at commit level. One ledger for all of them, because a team runs more than one agent and no vendor's own history covers the others.
+
+**Nothing leaves your machine.** The ledger is a separate git ref: your branches, working tree and index are never touched, no code is sent anywhere, and prompts are stored as hashes unless you ask otherwise.
+
+> **Status: pre-alpha, and already useful.** Everything above works today except surgical revert, which is next. See the [roadmap](#roadmap).
 
 ## Quick start
 
