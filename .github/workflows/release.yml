@@ -31,6 +31,6 @@ jobs:
       # The same gate as CI: nothing reaches npm that has not passed it.
       - run: pnpm check
       - run: pnpm smoke
-      - run: pnpm publish --filter deepblame --access public --no-git-checks --tag ${{ inputs.tag }}
+      - run: pnpm --filter deepblame publish --access public --no-git-checks --tag ${{ inputs.tag }}
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
