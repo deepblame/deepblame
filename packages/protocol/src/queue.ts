@@ -80,6 +80,23 @@ export interface WriteEvent extends QueueBase {
   hunks: QueueHunk[];
 }
 
+/**
+ * What the turn cost, from a harness that keeps its own count. Preferred over
+ * anything we work out ourselves: the harness knows which model actually
+ * answered and what it was billed.
+ */
+export interface UsageEvent extends QueueBase {
+  k: 'usage';
+  model: string | null;
+  provider: string | null;
+  input: number;
+  output: number;
+  cache_read: number;
+  cache_write: number;
+  /** The harness's own figure in dollars, when it has one. */
+  usd: number | null;
+}
+
 /** The turn ended (agent stopped, or the session closed). */
 export interface EndEvent extends QueueBase {
   k: 'end';
@@ -93,4 +110,5 @@ export type QueueEvent =
   | ReadEvent
   | WritePreEvent
   | WriteEvent
+  | UsageEvent
   | EndEvent;

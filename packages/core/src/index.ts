@@ -6,6 +6,7 @@ export { commandOnPath, detectHarnesses, type HarnessDetection } from './detect'
 export {
   appendEvents,
   captureClaudeCode,
+  captureEvent,
   findRepoRoot,
   gitBlobOid,
   openCapture,
@@ -23,7 +24,17 @@ export {
 } from './blame';
 export { readTranscriptUsage, type TranscriptUsage } from './transcript';
 export { priceUsd, rateFor, readRates, type Rate, type RateTable } from './pricing';
-export { findRun, listRuns, type LedgerRun, type ListOptions } from './runs';
+export {
+  findRun,
+  indexedRuns,
+  listRuns,
+  runsMatching,
+  runsTouching,
+  type LedgerRun,
+  type ListOptions,
+  type RunFilter,
+} from './runs';
+export { forgetIndex, hydrate, readIndex, type IndexedRun } from './runindex';
 export {
   claudeSettingsPath,
   gitHookInstalled,
@@ -35,10 +46,37 @@ export {
   type HookChange,
   type HookFile,
 } from './hooks';
+export {
+  applyRevert,
+  planRevert,
+  type ApplyOptions,
+  type RevertFile,
+  type RevertPlan,
+  type RevertSelection,
+  type RevertStatus,
+  type RevertWrite,
+} from './revert';
+export { aliasesOf, currentNameOf, readRenames, type RenameMap } from './rename';
+export {
+  diffBlobs,
+  joinLines,
+  lineMap,
+  parseDiff,
+  splitLines,
+  type DiffOptions,
+  type Hunk,
+} from './diffmap';
 export { runFromCommit } from './gitrun';
 export { appendRuns } from './seal';
 export { markWorktree, recordWorktreeTurn, type TurnOptions } from './worktree';
 export { codexNotifyInstalled, installCodexNotify, uninstallCodexNotify } from './hooks';
+export {
+  OPENCODE_PLUGIN,
+  OPENCODE_PLUGIN_DIR,
+  installOpenCodePlugin,
+  openCodePluginInstalled,
+  uninstallOpenCodePlugin,
+} from './hooks';
 export { hostId, sessionUuid, uuidV5, worktreeId } from './ids';
 export {
   blame,
@@ -49,6 +87,7 @@ export {
   log,
   recordCommit,
   recordTurn,
+  revert,
   sealNow,
   show,
   status,
@@ -59,6 +98,7 @@ export {
   type CostOptions,
   type CostReport,
   type HookOptions,
+  type HookAgent,
   type HooksAction,
   type HooksReport,
   type InitResult,
@@ -66,6 +106,8 @@ export {
   type LogReport,
   type RecordCommitReport,
   type RecordTurnOptions,
+  type RevertOptions,
+  type RevertReport,
   type SealReport,
   type ShowOptions,
   type ShowReport,

@@ -1,4 +1,6 @@
+import { sep } from 'node:path';
 import { CLI_NAME, LEDGER_REF, PRODUCT_NAME, STATE_DIR } from '@deepblame/protocol';
+import { OPENCODE_PLUGIN } from '@deepblame/core';
 import type {
   BlameReport,
   BlameSpan,
@@ -8,6 +10,7 @@ import type {
   InitResult,
   LedgerRun,
   LogReport,
+  RevertReport,
   SealResult,
   StatusReport,
 } from '@deepblame/core';
@@ -97,7 +100,7 @@ export function formatLog(report: LogReport, s: Style): string {
     agent: entry.run.harness.name,
     intent: clip(entry.run.task.intent ?? '', INTENT_WIDTH),
     touched: `${plural(entry.run.files_written.length, 'file')}`,
-    tools: `${entry.run.tool_calls.length} tools`,
+    tools: plural(entry.run.tool_calls.length, 'tool'),
     spend: money(entry.run.cost?.usd),
   }));
   const width = (key: 'when' | 'agent' | 'intent' | 'touched' | 'tools') =>
@@ -208,6 +211,9 @@ export function formatBlame(report: BlameReport, s: Style): string {
       )}`,
     );
   }
+  if (result.renamedFrom.length > 0) {
+    rows.push('', s.dim(`Followed through a rename: this file used to be ${result.renamedFrom.join(', then ')}.`));
+  }
   if (result.unverifiable > 0) {
     rows.push(
       '',
@@ -254,6 +260,7 @@ function confidence(value: number, reason: string): string {
   const percent = `${Math.round(value * 100)}%`;
   if (reason === 'exact') return `${percent}  the file is exactly as the run left it`;
   if (reason === 'survived') return `${percent}  changed elsewhere since, this line came through`;
+  if (reason === 'reformatted') return `${percent}  only the spacing has changed since, so probably still theirs`;
   return percent;
 }
 
@@ -309,6 +316,122 @@ export function formatCost(report: CostReport, s: Style): string {
   return lines(...rows);
 }
 
+const REVERT_NOTE: Record<string, string> = {
+  clean: 'comes out cleanly',
+  conflicted: 'changed again after the agent, so both cannot hold',
+  unchanged: 'nothing of that run is left in this file',
+  unverifiable: 'the ledger no longer holds what this needs',
+  binary: 'not text, and changed since, so there is nothing to merge',
+};
+
+export function formatRevert(report: RevertReport, s: Style): string {
+  if (!report.initialized) {
+    return lines(`${PRODUCT_NAME} is not set up here: ${report.repo.root}`, `Run ${s.bold(`${CLI_NAME} init`)} to start.`);
+  }
+  const plan = report.plan;
+  if (plan === null) return lines('Nothing to undo.');
+  if (plan.runs.length === 0) return lines(...noRuns(report, s));
+
+  const doing = plan.files.filter((file) => file.status === 'clean');
+  const stuck = plan.files.filter((file) => file.status === 'conflicted');
+  const inert = plan.files.filter((file) => file.status !== 'clean' && file.status !== 'conflicted');
+  const rows: string[] = [];
+
+  const verb = !plan.applied ? 'Undoing' : plan.written.length > 0 ? 'Undid' : 'Nothing undone from';
+  const heading = `${verb} ${plural(plan.runs.length, 'run')} by ${selectionOf(report)}`;
+  rows.push(`${s.bold(heading)}  ${s.dim(report.repo.root)}`, '');
+
+  if (plan.files.length === 0) {
+    rows.push('  Those runs wrote nothing that is still here to undo.');
+    return lines(...rows);
+  }
+
+  const shown = plan.files.map((file) => ({
+    done: plan.applied ? plan.written.includes(file.path) : file.status === 'clean',
+    path: file.recordedAs === null ? file.path : `${file.path} (was ${file.recordedAs})`,
+    what:
+      file.write?.kind === 'delete'
+        ? 'the whole file'
+        : file.changed > 0
+          ? plural(file.changed, 'line')
+          : '',
+    note:
+      file.write?.kind !== 'delete'
+        ? (REVERT_NOTE[file.status] ?? file.status)
+        : file.status === 'conflicted'
+          ? 'the agent created it, but you have changed it since'
+          : 'the agent created it, so it goes',
+  }));
+  const pathWidth = Math.max(...shown.map((row) => row.path.length));
+  const whatWidth = Math.max(...shown.map((row) => row.what.length));
+  for (const row of shown) {
+    rows.push(
+      `  ${row.done ? s.green('✓') : s.dim('·')} ${pad(row.path, pathWidth)}  ${pad(row.what, whatWidth)}  ${s.dim(row.note)}`,
+    );
+  }
+  rows.push('');
+
+  if (plan.applied) {
+    rows.push(
+      plan.written.length > 0
+        ? `${plural(plan.written.length, 'file')} rewritten. ${s.dim('Your other changes are untouched; check with git diff.')}`
+        : 'Nothing was written.',
+    );
+    if (plan.skipped.length > 0) {
+      rows.push(
+        s.dim(
+          `${plural(plan.skipped.length, 'file')} left alone: ${plan.skipped.join(', ')}. ` +
+            'Add --conflicts to write the conflicted ones with merge markers and resolve them yourself.',
+        ),
+      );
+    }
+    return lines(...rows);
+  }
+
+  rows.push(s.bold('Nothing has been written yet.'));
+  if (doing.length > 0) rows.push(`Add ${s.bold('--apply')} to undo ${plural(doing.length, 'file')}.`);
+  if (stuck.length > 0) {
+    rows.push(
+      s.dim(
+        `${plural(stuck.length, 'file')} cannot be undone cleanly. ${s.bold('--apply --conflicts')} writes them with the usual ` +
+          `<<<<<<< markers so you can resolve them; a file the agent created but you have since edited is never deleted for you.`,
+      ),
+    );
+  }
+  if (inert.length > 0) rows.push(s.dim(`${plural(inert.length, 'file')} needs nothing done.`));
+  if (plan.dirty) {
+    rows.push('', s.dim('Your worktree has uncommitted changes. Commit or stash them first and this is one git checkout away from undone.'));
+  }
+  return lines(...rows);
+}
+
+function noRuns(report: RevertReport, s: Style): string[] {
+  const { runs, agent, hours } = report.selection;
+  if (runs.length === 0 && agent === null && hours === null) {
+    return [
+      `${CLI_NAME} revert needs to know what to undo.`,
+      '',
+      `  ${s.bold(`${CLI_NAME} revert --run 43ac7f2`)}         one run`,
+      `  ${s.bold(`${CLI_NAME} revert --agent claude-code`)}   everything that agent did`,
+      `  ${s.bold(`${CLI_NAME} revert --agent claude-code --hours 2`)}  and only recently`,
+    ];
+  }
+  return [
+    `No recorded run matches ${selectionOf(report)}.`,
+    s.dim(`Run ${CLI_NAME} log to see what is recorded.`),
+  ];
+}
+
+function selectionOf(report: RevertReport): string {
+  const { runs, agent, hours } = report.selection;
+  const parts: string[] = [];
+  if (runs.length > 0) parts.push(runs.join(', '));
+  if (agent !== null) parts.push(agent);
+  if (parts.length === 0) parts.push('every agent');
+  if (hours !== null) parts.push(`in the last ${plural(hours, 'hour')}`);
+  return parts.join(' ');
+}
+
 export function formatHooks(report: HooksReport, s: Style): string {
   const installed = report.files.filter((file) => file.installed);
   if (report.action === 'install') {
@@ -319,7 +442,9 @@ export function formatHooks(report: HooksReport, s: Style): string {
         ? 'Every commit is now recorded, whichever tool wrote it'
         : change.file.endsWith('codex-notify.sh')
           ? 'Codex can now report each finished turn'
-          : 'Claude Code now reports every prompt, tool call and edit';
+          : change.file.endsWith(`${sep}${OPENCODE_PLUGIN}`) || change.file.endsWith(`/${OPENCODE_PLUGIN}`)
+            ? 'OpenCode now reports every prompt, tool call, edit and what it spent'
+            : 'Claude Code now reports every prompt, tool call and edit';
       rows.push(
         change.changed
           ? `${s.green('✓')} ${what}: ${s.bold(where)}`

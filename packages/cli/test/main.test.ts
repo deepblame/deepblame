@@ -1,4 +1,4 @@
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { LEDGER_REF } from '@deepblame/protocol';
@@ -209,6 +209,52 @@ describe('recording through the cli', () => {
     const { code, err } = run(['show', 'deadbeef'], repo);
     expect(code).toBe(1);
     expect(err).toContain("no run matches 'deadbeef'");
+  });
+
+  it('plans a revert, then applies it only when told to', () => {
+    const repo = makeRepo({ commits: true });
+    run(['init'], repo);
+    const file = join(repo, 'app.ts');
+
+    hook(repo, { hook_event_name: 'UserPromptSubmit', prompt: 'rename the answer' });
+    hook(repo, { hook_event_name: 'PreToolUse', tool_name: 'Edit', tool_input: { file_path: file } });
+    writeFileSync(file, 'export const theAnswer = 42;\n');
+    hook(repo, {
+      hook_event_name: 'PostToolUse',
+      tool_name: 'Edit',
+      tool_input: { file_path: file, old_string: 'answer', new_string: 'theAnswer' },
+      tool_response: {},
+    });
+    hook(repo, { hook_event_name: 'Stop' });
+
+    const planned = run(['revert', '--agent', 'claude-code'], repo);
+    expect(planned.code).toBe(0);
+    expect(planned.out).toContain('Undoing 1 run by claude-code');
+    expect(planned.out).toContain('app.ts');
+    expect(planned.out).toContain('Nothing has been written yet.');
+    expect(readFileSync(file, 'utf8')).toContain('theAnswer');
+
+    const applied = run(['revert', '--agent', 'claude-code', '--apply'], repo);
+    expect(applied.code).toBe(0);
+    expect(applied.out).toContain('1 file rewritten');
+    expect(readFileSync(file, 'utf8')).toBe('export const answer = 42;\n');
+  });
+
+  it('says what revert needs when it is told nothing', () => {
+    const repo = makeRepo({ commits: true });
+    run(['init'], repo);
+    const { code, out } = run(['revert'], repo);
+    expect(code).toBe(1);
+    expect(out).toContain('deepblame revert --run');
+    expect(out).toContain('deepblame revert --agent claude-code');
+  });
+
+  it('reports a revert that matched no run', () => {
+    const repo = makeRepo({ commits: true });
+    run(['init'], repo);
+    const { code, out } = run(['revert', '--run', 'deadbee'], repo);
+    expect(code).toBe(1);
+    expect(out).toContain('No recorded run matches deadbee');
   });
 
   it.each([

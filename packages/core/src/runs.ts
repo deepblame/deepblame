@@ -1,17 +1,17 @@
-import { parseRun, type Run } from '@deepblame/protocol';
-import { git } from './git';
-import { readLedger } from './ledger';
+import type { Run } from '@deepblame/protocol';
 import type { Repo } from './repo';
+import { hydrate, readIndex, type IndexedRun } from './runindex';
 
 /**
- * Reading side of the ledger. Run records are plain blobs under `runs/`, so
- * everything here is git plumbing plus JSON; nothing is cached yet. An index
- * arrives when repositories get big enough to need one.
+ * Reading side of the ledger. Run records are plain blobs under `runs/`, and
+ * everything here goes through the index first: choose the runs you need from
+ * the cache, then fetch only those records. The alternative — parsing every
+ * record on every command — is what made this slow.
  */
 
 export interface LedgerRun {
   run: Run;
-  /** Object id of the record itself, which is also its short handle. */
+  /** Object id of the record itself. */
   oid: string;
 }
 
@@ -21,56 +21,57 @@ export interface ListOptions {
 }
 
 export function listRuns(repo: Repo, options: ListOptions = {}): LedgerRun[] {
-  const head = readLedger(repo).head;
-  if (head === null) return [];
-  const cwd = repo.root;
-  const listing = git(['ls-tree', '-r', head, '--', 'runs'], { cwd });
-  const oids = listing
-    .split('\n')
-    .map((line) => line.match(/^\d+ blob ([0-9a-f]+)\t/)?.[1])
-    .filter((oid): oid is string => oid !== undefined);
-  if (oids.length === 0) return [];
+  const index = readIndex(repo);
+  const wanted = options.limit === undefined ? index : index.slice(0, options.limit);
+  return ordered(hydrate(repo, wanted));
+}
 
-  const runs: LedgerRun[] = [];
-  for (const { oid, content } of catFile(repo, oids)) {
-    const parsed = parseRun(safeJson(content));
-    if (parsed.ok) runs.push({ run: parsed.value, oid });
-  }
-  runs.sort((a, b) => Date.parse(b.run.started_at) - Date.parse(a.run.started_at));
-  return options.limit === undefined ? runs : runs.slice(0, options.limit);
+/** The index itself, for commands that only need to count or filter. */
+export function indexedRuns(repo: Repo): IndexedRun[] {
+  return readIndex(repo);
+}
+
+/**
+ * Runs that wrote any of these paths. This is the one that matters: blame on a
+ * single file should not have to read the whole ledger.
+ */
+export function runsTouching(repo: Repo, paths: ReadonlySet<string>): LedgerRun[] {
+  const wanted = readIndex(repo).filter((entry) => entry.paths.some((path) => paths.has(path)));
+  return ordered(hydrate(repo, wanted));
+}
+
+export interface RunFilter {
+  /** Run ids, or any unambiguous prefix of one. */
+  ids?: readonly string[];
+  agent?: string;
+  /** Only runs that started at or after this moment. */
+  since?: Date;
+}
+
+export function runsMatching(repo: Repo, filter: RunFilter): LedgerRun[] {
+  const ids = (filter.ids ?? []).map((id) => id.toLowerCase().replace(/-/g, ''));
+  const since = filter.since?.getTime();
+  const wanted = readIndex(repo).filter((entry) => {
+    if (ids.length > 0 && !ids.some((id) => entry.id.replace(/-/g, '').startsWith(id))) return false;
+    if (filter.agent !== undefined && entry.agent !== filter.agent) return false;
+    if (since !== undefined && Date.parse(entry.at) < since) return false;
+    return true;
+  });
+  return ordered(hydrate(repo, wanted));
 }
 
 /** Accepts a run id or any unambiguous prefix of one, like git does. */
 export function findRun(repo: Repo, prefix: string): LedgerRun | null {
   const needle = prefix.toLowerCase().replace(/-/g, '');
-  const matches = listRuns(repo).filter((entry) => entry.run.run_id.replace(/-/g, '').startsWith(needle));
-  return matches.length === 1 ? (matches[0] ?? null) : null;
+  const matches = readIndex(repo).filter((entry) => entry.id.replace(/-/g, '').startsWith(needle));
+  if (matches.length !== 1) return null;
+  return hydrate(repo, matches)[0] ?? null;
 }
 
-/** One git process for any number of objects; sizes are bytes, so parse bytes. */
-function catFile(repo: Repo, oids: readonly string[]): { oid: string; content: string }[] {
-  const out = git(['cat-file', '--batch'], { cwd: repo.root, input: `${oids.join('\n')}\n`, raw: true });
-  const buffer = Buffer.from(out, 'utf8');
-  const results: { oid: string; content: string }[] = [];
-  let at = 0;
-  while (at < buffer.length) {
-    const newline = buffer.indexOf(0x0a, at);
-    if (newline < 0) break;
-    const header = buffer.toString('utf8', at, newline).split(' ');
-    const oid = header[0];
-    const size = Number(header[2]);
-    if (oid === undefined || header[1] !== 'blob' || !Number.isFinite(size)) break;
-    const start = newline + 1;
-    results.push({ oid, content: buffer.toString('utf8', start, start + size) });
-    at = start + size + 1;
-  }
-  return results;
-}
-
-function safeJson(text: string): unknown {
-  try {
-    return JSON.parse(text);
-  } catch {
-    return null;
-  }
+function ordered(runs: LedgerRun[]): LedgerRun[] {
+  return runs.sort(
+    (a, b) =>
+      Date.parse(b.run.started_at) - Date.parse(a.run.started_at) ||
+      (a.run.run_id < b.run.run_id ? -1 : a.run.run_id > b.run.run_id ? 1 : 0),
+  );
 }

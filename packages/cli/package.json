@@ -18,7 +18,7 @@
   "type": "module",
   "bin": {
     "deepblame": "dist/deepblame.mjs",
-    "deepblame-capture": "dist/capture.mjs"
+    "deepblame-capture": "dist/capture.cjs"
   },
   "files": [
     "dist",

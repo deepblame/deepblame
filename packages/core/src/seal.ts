@@ -291,8 +291,26 @@ function runOf(segment: Segment, env: RunEnv, transcript: string | null, rates: 
 
   const startedAt = (prompt ?? first).ts;
   const endedAt = (end ?? last).ts;
-  const usage = transcript === null ? null : readTranscriptUsage(transcript, startedAt, endedAt);
+
+  // A harness that counts its own tokens is believed over anything we mine out
+  // of a log afterwards: it knows which model answered and what it was billed.
+  const reported = events.filter((event): event is Extract<QueueEvent, { k: 'usage' }> => event.k === 'usage');
+  const usage =
+    reported.length > 0
+      ? {
+          model: reported.find((event) => event.model !== null)?.model ?? null,
+          input_tokens: sum(reported, (event) => event.input),
+          output_tokens: sum(reported, (event) => event.output),
+          cache_write_tokens: sum(reported, (event) => event.cache_write),
+          cache_read_tokens: sum(reported, (event) => event.cache_read),
+          harness_usd: reported.some((event) => event.usd !== null) ? sum(reported, (event) => event.usd ?? 0) : null,
+          messages: reported.length,
+        }
+      : transcript === null
+        ? null
+        : readTranscriptUsage(transcript, startedAt, endedAt);
   const price = usage === null ? null : priceUsd(usage, rates);
+  const provider = reported.find((event) => event.provider !== null)?.provider ?? null;
 
   const run: Run = {
     schema_version: SCHEMA_VERSION,
@@ -300,7 +318,7 @@ function runOf(segment: Segment, env: RunEnv, transcript: string | null, rates: 
     session_id: sessionUuid(segment.agent, segment.session),
     parent_run_id: null,
     harness: { name: segment.agent, version: null },
-    model: usage?.model == null ? null : { provider: providerOf(usage.model), name: usage.model, version: null },
+    model: usage?.model == null ? null : { provider: provider ?? providerOf(usage.model), name: usage.model, version: null },
     actor: { type: 'agent', id: segment.agent },
     task: {
       prompt_sha256: prompt?.k === 'prompt' ? prompt.sha256 : null,
@@ -327,6 +345,12 @@ function runOf(segment: Segment, env: RunEnv, transcript: string | null, rates: 
     env: { branch: env.branch, head_commit: env.head, worktree_id: env.worktree, host_id: env.host },
   };
   return run;
+}
+
+function sum<T>(items: readonly T[], of: (item: T) => number): number {
+  let total = 0;
+  for (const item of items) total += of(item);
+  return total;
 }
 
 /** Enough to tell whose bill it is; the exact vendor list is not our business. */

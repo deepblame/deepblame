@@ -377,7 +377,7 @@ describe('hooks', () => {
     for (const command of [
       'deepblame-capture',
       'deepblame capture --agent claude-code',
-      'node packages/cli/dist/capture.mjs',
+      'node packages/cli/dist/capture.cjs',
       '"/opt/node/bin/node" "/usr/lib/node_modules/deepblame/dist/capture.mjs"',
     ]) {
       installClaudeCode(root, command, { local: true });

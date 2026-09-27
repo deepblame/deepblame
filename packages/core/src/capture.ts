@@ -200,6 +200,152 @@ export function appendEvents(context: CaptureContext, events: readonly QueueEven
   }
 }
 
+/**
+ * The open door.
+ *
+ * Every harness reports differently, and writing an adapter for each one does
+ * not scale — there will always be a tool we have not heard of. So there is
+ * one documented shape any tool can send us, one JSON object per call:
+ *
+ *   { "kind": "prompt", "agent": "opencode", "session": "ses_1", "text": "…" }
+ *   { "kind": "write-pre", "path": "src/a.ts" }
+ *   { "kind": "write", "path": "src/a.ts", "tool": "edit", "old": "…", "new": "…" }
+ *   { "kind": "tool", "tool": "bash", "args": { … }, "ok": true }
+ *   { "kind": "read", "path": "src/b.ts" }
+ *   { "kind": "usage", "model": "claude-sonnet-4", "input": 12, "output": 3, "usd": 0.01 }
+ *   { "kind": "end" }
+ *
+ * `agent` and `session` may be sent once per call or on the first call only;
+ * everything else is optional. Anything we do not recognise is ignored rather
+ * than rejected, because a recorder that errors is a recorder people remove.
+ */
+export function captureEvent(payload: unknown, context: CaptureContext, now: Date): CaptureResult {
+  const none: CaptureResult = { events: [], seal: false };
+  if (!isRecord(payload)) return none;
+  const agent = asHarness(payload['agent']);
+  const session = asString(payload['session']) ?? asString(payload['session_id']);
+  const kind = asString(payload['kind']);
+  if (agent === null || session === null || kind === null) return none;
+  const base = { v: 1 as const, ts: now.toISOString(), agent, session };
+
+  switch (kind) {
+    case 'session':
+      return {
+        events: [
+          {
+            ...base,
+            k: 'session',
+            cwd: asString(payload['cwd']) ?? context.root,
+            source: asString(payload['source']),
+            transcript: asString(payload['transcript']),
+          },
+        ],
+        seal: false,
+      };
+
+    case 'prompt': {
+      const text = asString(payload['text']);
+      if (text === null) return none;
+      const event: QueueEvent = {
+        ...base,
+        k: 'prompt',
+        sha256: sha256(text),
+        intent: context.intent ? intentOf(text) : null,
+      };
+      if (context.promptText) event.text = text;
+      return { events: [event], seal: false };
+    }
+
+    case 'read': {
+      const path = repoPath(context.root, payload['path']);
+      return path === null ? none : { events: [{ ...base, k: 'read', path }], seal: false };
+    }
+
+    case 'write-pre': {
+      const path = repoPath(context.root, payload['path']);
+      if (path === null) return none;
+      const before = hashFile(context, join(context.root, path));
+      return { events: [{ ...base, k: 'write-pre', path, blob: before.blob, lines: before.lines }], seal: false };
+    }
+
+    case 'write': {
+      const path = repoPath(context.root, payload['path']);
+      if (path === null) return none;
+      const after = hashFile(context, join(context.root, path));
+      const tool = asString(payload['tool']) ?? 'write';
+      // The same shape Claude Code's Edit tool reports, so one hunk builder
+      // serves both: what was replaced, and what replaced it.
+      const edit = { old_string: payload['old'], new_string: payload['new'], replace_all: payload['all'] === true };
+      return {
+        events: [
+          {
+            ...base,
+            k: 'write',
+            path,
+            tool: tool === 'edit' ? 'Edit' : tool,
+            blob: after.blob,
+            lines: after.lines,
+            hunks: after.text === null ? [] : hunksOf(tool === 'edit' ? 'Edit' : tool, edit, after.text),
+          },
+        ],
+        seal: false,
+      };
+    }
+
+    case 'tool': {
+      const name = asString(payload['tool']);
+      if (name === null) return none;
+      return {
+        events: [
+          {
+            ...base,
+            k: 'tool',
+            name,
+            ok: payload['ok'] !== false,
+            args_sha256: sha256(stableJson(payload['args'])),
+            result_sha256: payload['result'] === undefined ? null : sha256(stableJson(payload['result'])),
+          },
+        ],
+        seal: false,
+      };
+    }
+
+    case 'usage':
+      return {
+        events: [
+          {
+            ...base,
+            k: 'usage',
+            model: asString(payload['model']),
+            provider: asString(payload['provider']),
+            input: asCount(payload['input']),
+            output: asCount(payload['output']),
+            cache_read: asCount(payload['cache_read']),
+            cache_write: asCount(payload['cache_write']),
+            usd: typeof payload['usd'] === 'number' && payload['usd'] >= 0 ? payload['usd'] : null,
+          },
+        ],
+        seal: false,
+      };
+
+    case 'end':
+      return { events: [{ ...base, k: 'end', reason: asString(payload['reason']) ?? 'end' }], seal: true };
+
+    default:
+      return none;
+  }
+}
+
+function asCount(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.round(value) : 0;
+}
+
+/** Only harnesses the ledger has a name for; anything else is not recorded. */
+function asHarness(value: unknown): HarnessId | null {
+  const known: readonly string[] = ['opencode', 'claude-code', 'codex', 'cursor', 'git'];
+  return typeof value === 'string' && known.includes(value) ? (value as HarnessId) : null;
+}
+
 function hashFile(context: CaptureContext, file: string): { blob: string | null; lines: number; text: string | null } {
   const empty = { blob: null, lines: 0, text: null };
   try {

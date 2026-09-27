@@ -13,9 +13,11 @@ import {
   log,
   recordCommit,
   recordTurn,
+  revert,
   sealNow,
   show,
   status,
+  type HookAgent,
   type HooksAction,
 } from '@deepblame/core';
 import { CLI_NAME } from '@deepblame/protocol';
@@ -27,6 +29,7 @@ import {
   formatHooks,
   formatInit,
   formatLog,
+  formatRevert,
   formatSeal,
   formatShow,
   formatStatus,
@@ -59,16 +62,23 @@ Usage
   ${CLI_NAME} show <run>       show one run in full
   ${CLI_NAME} blame <file>     which agent wrote each line, and how sure we are
   ${CLI_NAME} cost             what the agents spent, by model and agent
+  ${CLI_NAME} revert           undo one agent's work and nobody else's
   ${CLI_NAME} seal             fold captured events into the ledger now
   ${CLI_NAME} hooks <action>   install, uninstall or check capture hooks
-                   ${' '.repeat(CLI_NAME.length)}   --agent git also records every commit,
-                   ${' '.repeat(CLI_NAME.length)}   which covers tools that have no hooks
+                   ${' '.repeat(CLI_NAME.length)}   --agent claude-code | opencode | codex | git | all
+                   ${' '.repeat(CLI_NAME.length)}   git records every commit, which covers
+                   ${' '.repeat(CLI_NAME.length)}   the tools that have no hooks of their own
 
 Options
   -C <dir>        run as if started in <dir>
   --limit <n>     how many runs to list (default ${DEFAULT_LIMIT})
   --days <n>      only count the last <n> days in cost
   --why <line>    explain one line in blame
+  --run <id>      which run to revert; repeat for several
+  --agent <name>  which agent to revert, or to hook up
+  --hours <n>     only revert runs from the last <n> hours
+  --apply         actually write the revert; without it nothing is touched
+  --conflicts     write conflicted files too, with merge markers
   --local         keep hooks in .claude/settings.local.json, uncommitted
   --no-hooks      set up without touching your agent's settings
   --no-seal       list only what is already in the ledger
@@ -76,8 +86,8 @@ Options
   -h, --help      show this help
   -v, --version   print the version
 
-Recording covers Claude Code today. OpenCode, Codex and Cursor are next,
-then blame --why and surgical revert.
+Recording covers Claude Code and OpenCode in full, Codex turn by turn, and
+every other tool at commit level.
 `;
 
 /** Returns the exit code instead of exiting, so it can be tested in-process. */
@@ -92,7 +102,11 @@ export function main(argv: readonly string[], io: Io): number {
         cwd: { type: 'string', short: 'C' },
         limit: { type: 'string' },
         days: { type: 'string' },
+        hours: { type: 'string' },
         why: { type: 'string' },
+        run: { type: 'string', multiple: true },
+        apply: { type: 'boolean' },
+        conflicts: { type: 'boolean' },
         agent: { type: 'string' },
         intent: { type: 'string' },
         notify: { type: 'string' },
@@ -135,6 +149,11 @@ export function main(argv: readonly string[], io: Io): number {
   if (values.days !== undefined) {
     days = Number(values.days);
     if (!Number.isInteger(days) || days < 1) return usageError(io, `--days needs a positive number`);
+  }
+  let hours: number | undefined;
+  if (values.hours !== undefined) {
+    hours = Number(values.hours);
+    if (!Number.isFinite(hours) || hours <= 0) return usageError(io, `--hours needs a positive number`);
   }
 
   try {
@@ -186,6 +205,23 @@ export function main(argv: readonly string[], io: Io): number {
         io.stdout(values.json ? toJson(report) : formatCost(report, style));
         return EXIT.ok;
       }
+      case 'revert': {
+        const report = revert(cwd, {
+          env: io.env,
+          runs: values.run,
+          agent: values.agent,
+          hours,
+          apply: values.apply === true,
+          conflicts: values.conflicts === true,
+          seal: values['no-seal'] !== true,
+        });
+        io.stdout(values.json ? toJson(report.plan) : formatRevert(report, style));
+        // Nothing matched, or something was left behind: both are results
+        // rather than crashes, but a script has to be able to tell.
+        if (report.plan !== null && report.initialized && report.plan.runs.length === 0) return EXIT.failure;
+        if (report.plan?.applied === true && report.plan.skipped.length > 0) return EXIT.failure;
+        return EXIT.ok;
+      }
       case 'seal': {
         const report = sealNow(cwd, { env: io.env });
         io.stdout(values.json ? toJson(report.result) : formatSeal(report.result, style));
@@ -213,8 +249,8 @@ export function main(argv: readonly string[], io: Io): number {
         if (argument === undefined) return usageError(io, `${CLI_NAME} hooks needs install, uninstall or status`);
         if (!isHooksAction(argument)) return usageError(io, `unknown hooks action '${argument}'`);
         const agent = values.agent ?? 'claude-code';
-        if (agent !== 'claude-code' && agent !== 'git' && agent !== 'codex' && agent !== 'all') {
-          return usageError(io, `--agent takes claude-code, git, codex or all`);
+        if (!isHookAgent(agent)) {
+          return usageError(io, `--agent takes claude-code, opencode, codex, git or all`);
         }
         const report = hooks(cwd, argument, {
           env: io.env,
@@ -246,7 +282,7 @@ function hookCommand(io: Io): string {
   if (commandOnPath(capture, io.env)) return capture;
   const entry = io.entry;
   if (entry !== undefined && entry !== '') {
-    const sibling = entry.endsWith('.mjs') ? join(dirname(entry), 'capture.mjs') : `${entry}-capture`;
+    const sibling = entry.endsWith('.mjs') ? join(dirname(entry), 'capture.cjs') : `${entry}-capture`;
     if (existsSync(sibling)) return `${quote(process.execPath)} ${quote(sibling)}`;
   }
   if (commandOnPath(CLI_NAME, io.env)) return `${CLI_NAME} capture --agent claude-code`;
@@ -290,6 +326,10 @@ function turnCommand(io: Io): string {
 
 function quote(path: string): string {
   return /[\s"']/.test(path) ? `"${path}"` : path;
+}
+
+function isHookAgent(value: string): value is HookAgent {
+  return value === 'claude-code' || value === 'opencode' || value === 'codex' || value === 'git' || value === 'all';
 }
 
 function isHooksAction(value: string): value is HooksAction {

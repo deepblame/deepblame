@@ -31,6 +31,12 @@ export const IGNORE_FILE = '.gitignore';
 export const SEAL_LOCK_FILE = 'seal.lock';
 export const SEAL_INDEX_FILE = 'seal.index';
 /**
+ * A cache of what is in the ledger, so reading it does not mean parsing every
+ * record. Append-only, safe to delete, rebuilt from the ledger when missing.
+ */
+export const RUN_INDEX_FILE = 'runs.index.ndjson';
+export const RUN_INDEX_VERSION = 1;
+/**
  * Where the capture path parks file contents until the sealer moves them into
  * git's object store. Without the content there is no way to prove a line is
  * still the line an agent wrote, and no way to put it back.

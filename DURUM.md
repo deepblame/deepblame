@@ -292,6 +292,57 @@ pnpm workspaces. `protocol` ve `core` yayınlanmayan iç paketler: TS kaynağı 
 - Repo GitHub org'a push edilecek (org açıldı, CI hazır, ilk gerçek Windows koşusu orada olacak)
 - npm hesabı açılacak (2FA); `deepblame` adı ilk yayınla rezerve edilecek
 
+### 27 Eylül (gece) — cerrahi geri alma, blame dayanıklılığı, hız, OpenCode
+
+Dördü de bitti. Ürünün vaat ettiği her şey artık kodda.
+
+**1. `deepblame revert` — cerrahi geri alma.** Ürünün üçlemesini tamamlayan parça (`revert.ts`).
+- Yöntem: **ters yönlü üç yollu birleştirme değil, cerrahi dikiş.** Defter, run'ın hangi satırları değiştirdiğini biliyor. Önce "run'ın bıraktığı hal" ile "ondan önceki hal" arasındaki en küçük fark çıkarılıyor; sonra o satır aralıkları dosyanın bugünkü haline taşınıyor; metin hâlâ run'ın bıraktığı metinse yerine eski satırlar konuyor. Sonuç: **ajanın işi gidiyor, sonradan yazılan her şey kalıyor.**
+- Neden düz `git merge-file` yetmiyor: git, yan yana satırlardaki iki değişikliği çakışma sayıyor. Ajan ile insan çoğu zaman yan yana satırlara dokunuyor. Bizim git'te olmayan bir bilgimiz var (hangi satır kimin), o yüzden daha iyisini yapabiliyoruz. Gerçek testte: ajan `upload.js`'e retry döngüsü ekledi, insan aynı dosyada `export` satırını değiştirdi → revert retry'ı aldı, export değişikliği kaldı. `git merge-file` bunu çakışma verip bırakıyordu.
+- Güvenlik kuralları (hepsi test edilmiş): `--apply` yazılmadıkça **hiçbir şey yazılmıyor**, sadece plan gösteriliyor. Çakışma varsa dosyaya dokunulmuyor; `--conflicts` dersen git'in kendi `<<<<<<<` işaretleriyle yazıyor, editörde çözüyorsun. **Ajanın oluşturduğu ama sonradan senin düzenlediğin dosya asla silinmiyor** (`--conflicts` ile bile — yarım silinmiş dosya diye bir şey yok). Defterde içerik kalmamışsa tahmin yürütmüyor, "kanıtsız" diyor. İkili (binary) dosya: dosya run'dan beri hiç değişmemişse birebir geri konuyor, değiştiyse dokunulmuyor.
+- Seçim: `--run <id>` (tek tur, ön ek yeter), `--agent <ad>` (o ajanın tüm işi), `--hours <n>` (son N saat). Birden çok run aynı dosyaya dokunmuşsa yeniden eskiye doğru tek tek geri alınıyor.
+- Çıkış kodu: eksik kalan dosya varsa 1 (betikler anlasın).
+
+**2. blame'in zor senaryoları.**
+- **Yeniden adlandırma** (`rename.ts`): `git mv a.js b.js` sonrası `blame b.js` ajanı buluyor. Commit edilmiş ve henüz commit edilmemiş (staged) taşımaların ikisi de takip ediliyor, zincir hâlinde (a→b→c). Çıktı dosyanın eski adını da yazıyor. Revert de dosyayı yeni adıyla bulup oraya yazıyor.
+- **Biçimlendirme / prettier**: dosyanın girintisi baştan sona değişse bile satır kaybolmuyor. Katı karşılaştırma satırı bulamazsa **boşlukları yok sayan ikinci bir karşılaştırma** yapılıyor; satır oradan bulunursa güven `%70` ve gerekçe "sadece boşluk değişmiş, muhtemelen hâlâ onun". Kodun kendisi değiştiyse yine sahiplenmiyor.
+- **Merge**: birleştirme commit'i hiçbir satır yazmadığı için **hiç run oluşturmuyor** (doğrusu bu — satırları asıl commit'ler yazdı). Ajanın satırı iki dalın birleşmesinden sonra da ajanda kalıyor.
+- Güven kademeleri artık üç: `%100` birebir, `%90` başka yer değişti satır aynen geldi, `%70` sadece boşluk değişti.
+- Satır takibi `diffmap.ts`'e çıkarıldı; blame ve revert aynı motoru kullanıyor (iki ayrı kopya bakımı yapılmıyor).
+
+**3. Hız.**
+- **Run indeksi** (`runindex.ts`): `.deepblame/runs.index.ndjson`. Her run için sadece seçim için gerekenler (zaman, ajan, model, yazdığı yollar, maliyet, kaydın nesne kimliği). Komutlar önce indeksten hangi run'ların gerektiğine karar veriyor, sonra **yalnızca onları** okuyor. Sonuçlar (1200 run'lık test reposunda): `log --limit 20` 55 ms → **26 ms ve artık run sayısıyla büyümüyor**; `blame` tüm defteri okumak yerine sadece o dosyaya dokunan run'ları okuyor, **50 ms**; `cost` tek kayıt bile açmıyor, hepsini indeksten topluyor.
+- İndeks **sadece önbellek**: sil, bir sonraki komut defterden yeniden kurar. Ekle-only NDJSON; sonuna yazılan "head" satırı sayesinde yarıda kalmış yazım bozuk dosya bırakmıyor, fazlalık satırlar okurken atılıyor. Bozuk/eski sürüm indeks görülürse çöpe atılıp yeniden kuruluyor. Yeni run gelince baştan kurmuyor, sadece eklenen kayıtları ekliyor.
+- blame ayrıca: run başına bir `cat-file -e` yerine hepsi için tek süreç; aynı hali bırakan run'lar tek `git diff` paylaşıyor; **dosyanın tüm satırları sahiplendiği anda duruyor** (uzun geçmişli dosyada 30 `git diff` yerine 1).
+- **Hook gecikmesi 58 ms → 42 ms.** Sebep: yakalama paketi artık **CommonJS**, ESM değil. Node'un ESM yükleyicisi ~20 ms tutuyordu. Node'un kendi açılışı 27–30 ms (bizim elimizde değil), bizim payımız 28 ms → **15 ms**, yani bütçenin içinde. `child_process` sadece turu mühürlerken yükleniyor; Node 22+ varsa bytecode önbelleği açılıyor. Daemon'a şimdilik gerek yok — kalan süre Node'un açılışı, onu ancak kalıcı süreç çözer ve bedeli (bayat soket, yetim süreç, Windows named pipe) bu kazanca değmez.
+
+**4. OpenCode eklentisi — yazıldı, tahminle değil.** Eklenti API'sini npm'den `@opencode-ai/plugin@1.18.32` ve `@opencode-ai/sdk@1.18.32` paketlerini indirip **kendi tip tanımlarından** doğruladık:
+- `Plugin = (input: PluginInput, options?) => Promise<Hooks>`; `PluginInput = { client, project, directory, worktree, serverUrl, $, experimental_workspace }`
+- `"chat.message"(input: { sessionID, … }, output: { message, parts })` → kullanıcının istemi (`parts[].text`)
+- `"tool.execute.before"(input: { tool, sessionID, callID }, output: { args })` → düzenlemeden **önceki** dosya hali
+- `"tool.execute.after"(input: { tool, sessionID, callID, args }, output: { title, output, metadata })` → sonraki hal + araç kaydı
+- `event({ event })` → `session.idle` (turun sonu, `properties.sessionID`) ve `message.updated` (`properties.info` = `AssistantMessage`: `cost: number`, `tokens: { input, output, reasoning, cache: { read, write } }`, `modelID`, `providerID`)
+- Yani **OpenCode'da maliyeti biz hesaplamıyoruz, OpenCode'un kendi rakamını alıyoruz** — Claude Code'da oturum kaydını madenciliğe göre daha güvenilir. `deepblame show` bunu "(agent-reported)" diye işaretliyor.
+- Eklenti dosyası `.opencode/plugin/deepblame.js` olarak projeye yazılıyor, `init` OpenCode'u tespit ederse kendisi kuruyor. Okunabilir, 40 satır, tek işi olayları JSON'a çevirip yakalama komutuna vermek. Kaldırırken sadece bizim yazdığımız dosya siliniyor (başkasının eklentisine dokunulmuyor). Dosya testte Node ile modül olarak **sözdizimi kontrolünden geçiriliyor**, yani bozuk kod kimsenin editörüne düşmüyor.
+- Doğrulayamadığımız tek şey: `edit`/`write` araçlarının argümanında dosya yolunun alan adı. Tahmin etmek yerine **toleranslı** yazıldı: `filePath`, `file_path`, `path`, `file` sırayla deneniyor; hiçbiri yoksa o düzenleme sessizce kaydedilmiyor (yanlış kaydetmek yerine kaydetmemek).
+
+**Herkese açık giriş kapısı (yeni ve önemli).** Her araç için adaptör yazmak ölçeklenmiyor; her zaman duymadığımız bir araç olacak. Artık **belgelenmiş tek bir JSON şekli** var, stdin'den tek satır: `{"kind":"prompt"|"read"|"write-pre"|"write"|"tool"|"usage"|"end", "agent":…, "session":…, …}`. SDK yok, bağımlılık yok, sürümümüzü takip etme zorunluluğu yok. Kendi OpenCode eklentimiz bunun üstünde 40 satır. README'de örneğiyle duruyor. Bu hem entegrasyon maliyetini sıfıra indiriyor hem de "vendor-neutral" iddiasını somutlaştırıyor.
+
+**Testler:** 130 (protocol 10, core 97, cli 23). `pnpm smoke` Linux'ta geçiyor.
+
+### Faz 1 — kalanlar (güncel)
+
+1. ~~Git yedeği~~ ✅ · ~~Codex~~ ✅ · ~~OpenCode native eklentisi~~ ✅
+2. ~~Model ve maliyet~~ ✅
+3. ~~İndeks~~ ✅ (SQLite değil, NDJSON önbellek — bağımlılık eklemeye gerek kalmadı)
+4. ~~blame'in zor senaryoları~~ ✅ (rename, prettier, merge)
+5. ~~Cerrahi geri alma~~ ✅
+6. **Daemon** — şimdilik gerekmiyor (yukarıdaki gerekçe). Node'un açılışı 27 ms'nin altına inmezse ve kullanıcılar şikâyet ederse yeniden bakılacak.
+7. **Kendi üstümüzde dogfood** — hook'lar kurulu, gerçek kayıt bir sonraki Claude Code oturumunda başlayacak.
+8. **npm trusted publishing** kurulacak (şimdilik yayın web-OTP ile elle yapılıyor).
+9. **Defter budama politikası** — dosya içerikleri defterde duruyor; git sıkıştırıp tekilleştiriyor ama uzun vadede eski blob'ları atma kuralı gerekecek.
+10. **Sıradaki büyük iş: takım defteri** — run'ları paylaşılan bir uzak depoya göndermek, PR kontrolü ("bu diff'i hangi ajan yazdı"), imzalı denetim raporu.
+
 ## 17. Açık sorular
 
 - **Claude Code hook şeması kendi bilgimizden yazıldı** (dokümantasyona erişilemedi: alan adı izin istedi, kullanıcı reddetti). Alan adları (`hook_event_name`, `tool_name`, `tool_input.file_path`, `old_string`/`new_string`, `session_id`) doğru biliniyor ama **gerçek bir Claude Code oturumunda henüz doğrulanmadı.** İlk dogfood turunda kontrol edilecek; yanlış alan varsa `capture.ts` içinde tek yerde düzelir.
@@ -300,9 +351,9 @@ pnpm workspaces. `protocol` ve `core` yayınlanmayan iç paketler: TS kaynağı 
 - **İki makinede ayrı ayrı `init`** → iki farklı genesis commit. Senk fazında iki defter birleştirilecek (merge commit, küme birleşimi); `status` şimdilik ilk kökü gösteriyor.
 - **`git log --all` defteri de gösteriyor** (her `refs/*` gibi). Faz 1'de run'lar arttıkça gürültü olabilir; toplu commit ve dokümantasyonla ele alınacak.
 - **Windows henüz gerçek bir makinede çalıştırılmadı.** İlk gerçek doğrulama repo GitHub'a yüklenince CI'da olacak; Windows kuralları şimdilik Linux'ta taklit edilerek test edildi.
-- **Hook gecikmesi 55 ms** — bütçe 15 ms. Kullanıcılar bunu fark eder mi? Daemon'a ne zaman geçmeliyiz? (bkz. 12)
+- ~~**Hook gecikmesi 55 ms**~~ → 42 ms, bizim payımız 15 ms (bütçe içinde). Kalanı Node'un kendi açılışı. Daemon ertelendi.
 - **`init` ajan ayar dosyasını değiştiriyor.** Kullanıcılar bunu saygısızlık olarak görür mü, yoksa kolaylık mı? İlk geri bildirimlerde ölçülecek; `--no-hooks` var.
-- **Fiyat tablosu eskir.** Model fiyatları değişince `pricing.ts` güncellenmeli; yeni modeller (opus 5 gibi) tabloda yok, kullanıcı config'e yazana kadar maliyet boş görünür. Uzun vadede fiyatları uzaktan çekmek mi gerekir, yoksa sürümle göndermek yeterli mi?
+- **Fiyat tablosu eskir** (OpenCode'da sorun değil, kendi rakamını veriyor; Claude Code'da geçerli). Model fiyatları değişince `pricing.ts` güncellenmeli; yeni modeller (opus 5 gibi) tabloda yok, kullanıcı config'e yazana kadar maliyet boş görünür. Uzun vadede fiyatları uzaktan çekmek mi gerekir, yoksa sürümle göndermek yeterli mi?
 - Çalışma şekli (27 Eylül itibarıyla): **GitHub artık ana kopya.** Claude bulut konteynerinde kodu yazıp test ediyor, değişen dosyaları sohbete gönderiyor; kullanıcı ya dosyaları Finder'dan yerine koyup GitHub Desktop'tan push ediyor, ya da GitHub'ın web arayüzünden yüklüyor. Bu oturumun GitHub'a doğrudan yazma erişimi yok (proxy repo'ya bağlı olmayan API çağrılarını reddediyor). Terminal gerekmiyor.
 
 ## 18. Bağlam notu

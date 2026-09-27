@@ -1,12 +1,16 @@
-import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { appendEvents, captureClaudeCode, openCapture } from '@deepblame/core/capture';
+import { appendEvents, captureClaudeCode, captureEvent, openCapture } from '@deepblame/core/capture';
 
 /**
  * The hook entry point. It runs on every agent tool call, so it loads only
  * the capture module (no schema library, no git), writes one line and exits.
  * It prints nothing: an agent reads a hook's stdout, and it always exits 0,
  * because a recorder that can fail a build is a recorder people turn off.
+ *
+ * Everything here is measured in milliseconds of somebody else's turn. It is
+ * bundled as CommonJS because node's ESM loader costs around 20ms of startup,
+ * child_process is loaded only on the one event that needs it, and the
+ * bytecode cache is switched on where the runtime has one.
  */
 
 export interface CaptureIo {
@@ -24,7 +28,12 @@ export function capture(argv: readonly string[], io: CaptureIo): number {
     const cwd = fieldString(payload, 'cwd') ?? flag(argv, '-C') ?? flag(argv, '--cwd') ?? io.cwd;
     const context = openCapture(cwd);
     if (context === null) return 0;
-    const result = captureClaudeCode(payload, context, new Date());
+    // Claude Code sends its own hook payload; everything else sends the plain
+    // shape any tool can produce. Which one it is, the payload itself says.
+    const result =
+      fieldString(payload, 'hook_event_name') !== null
+        ? captureClaudeCode(payload, context, new Date())
+        : captureEvent(withAgent(payload, flag(argv, '--agent')), context, new Date());
     appendEvents(context, result.events);
     if (result.seal) sealInBackground(io, context.root);
   } catch {
@@ -33,10 +42,20 @@ export function capture(argv: readonly string[], io: CaptureIo): number {
   return 0;
 }
 
+/** `--agent opencode` names the harness when the payload has not. */
+function withAgent(payload: unknown, agent: string | null): unknown {
+  if (typeof payload !== 'object' || payload === null || agent === null) return payload;
+  const record = payload as Record<string, unknown>;
+  return record['agent'] === undefined ? { ...record, agent } : record;
+}
+
 function sealInBackground(io: CaptureIo, root: string): void {
   const entry = io.entry;
   if (entry === undefined || entry === '') return;
   try {
+    // Loaded here rather than at the top: this happens once per turn, while
+    // everything above happens on every single tool call.
+    const { spawn } = require('node:child_process') as typeof import('node:child_process');
     spawn(process.execPath, [entry, 'seal', '-C', root], {
       detached: true,
       stdio: 'ignore',

@@ -6,21 +6,27 @@ import { tryGit } from './git';
 import { runFromCommit } from './gitrun';
 import {
   CODEX_NOTIFY,
+  OPENCODE_PLUGIN,
+  OPENCODE_PLUGIN_DIR,
   codexNotifyInstalled,
   gitHookInstalled,
   hooksInstalled,
   installClaudeCode,
   installCodexNotify,
   installGitHook,
+  installOpenCodePlugin,
+  openCodePluginInstalled,
   uninstallClaudeCode,
   uninstallCodexNotify,
   uninstallGitHook,
+  uninstallOpenCodePlugin,
   type HookChange,
   type HookFile,
 } from './hooks';
 import { createGenesis, readLedger, type LedgerState } from './ledger';
 import { openRepo, type Repo } from './repo';
-import { findRun, listRuns, type LedgerRun } from './runs';
+import { applyRevert, planRevert, type RevertPlan } from './revert';
+import { findRun, indexedRuns, listRuns, type LedgerRun } from './runs';
 import { appendRuns, seal, type SealResult } from './seal';
 import { ensureStateDir, readStateDir, type StateDirInfo } from './state';
 import { markWorktree, recordWorktreeTurn } from './worktree';
@@ -40,7 +46,7 @@ export interface HookOptions {
   /** Write to the personal settings file instead of the shared one. */
   local?: boolean;
   /** Which adapter to act on. Defaults to Claude Code. */
-  agent?: 'claude-code' | 'git' | 'codex' | 'all';
+  agent?: HookAgent;
   /** How the Codex notify script should call us. */
   turnCommand?: string;
 }
@@ -58,6 +64,7 @@ function hookFilesOf(repo: Repo): HookFile[] {
     ...hooksInstalled(repo.root),
     { file: join(hooksDir, 'post-commit'), installed: gitHookInstalled(hooksDir) },
     { file: join(stateDir, CODEX_NOTIFY), installed: codexNotifyInstalled(stateDir) },
+    { file: join(repo.root, OPENCODE_PLUGIN_DIR, OPENCODE_PLUGIN), installed: openCodePluginInstalled(repo.root) },
   ];
 }
 
@@ -119,8 +126,13 @@ export function init(cwd: string, options: CommandOptions & HookOptions = {}): I
     harnesses,
     hooks,
   };
-  if (options.noHooks !== true && options.hookCommand !== undefined && claudeCode?.found === true) {
-    hooks.push(installClaudeCode(repo.root, options.hookCommand, { local: options.local }));
+  if (options.noHooks !== true && options.hookCommand !== undefined) {
+    if (claudeCode?.found === true) {
+      hooks.push(installClaudeCode(repo.root, options.hookCommand, { local: options.local }));
+    }
+    if (harnesses.find((harness) => harness.id === 'opencode')?.found === true) {
+      hooks.push(installOpenCodePlugin(repo.root, options.hookCommand));
+    }
   }
   return result;
 }
@@ -305,29 +317,31 @@ export function cost(cwd: string, options: CostOptions = {}): CostReport {
     return fresh;
   };
 
-  for (const { run } of listRuns(repo)) {
-    if (cutoff !== null && Date.parse(run.started_at) < cutoff) continue;
+  // Straight off the index: spend is a summary, and summarising should not
+  // mean reading and validating every record in the ledger.
+  for (const run of indexedRuns(repo)) {
+    if (cutoff !== null && Date.parse(run.at) < cutoff) continue;
     report.runs += 1;
     const spend = run.cost;
-    if (spend === undefined) {
+    if (spend === null) {
       report.unmeasured += 1;
       continue;
     }
-    report.totals.input_tokens += spend.input_tokens;
-    report.totals.output_tokens += spend.output_tokens;
-    report.totals.cache_write_tokens += spend.cache_write_tokens ?? 0;
-    report.totals.cache_read_tokens += spend.cache_read_tokens ?? 0;
+    report.totals.input_tokens += spend.in;
+    report.totals.output_tokens += spend.out;
+    report.totals.cache_write_tokens += spend.cw;
+    report.totals.cache_read_tokens += spend.cr;
     if (spend.usd === null) report.totals.unpriced += 1;
     else report.totals.usd += spend.usd;
 
     for (const [into, key] of [
-      [models, run.model?.name ?? 'unknown model'],
-      [agents, run.harness.name],
+      [models, run.model ?? 'unknown model'],
+      [agents, run.agent],
     ] as const) {
       const entry = bucket(into, key);
       entry.runs += 1;
-      entry.input_tokens += spend.input_tokens;
-      entry.output_tokens += spend.output_tokens;
+      entry.input_tokens += spend.in;
+      entry.output_tokens += spend.out;
       if (spend.usd === null) entry.unpriced += 1;
       else entry.usd += spend.usd;
     }
@@ -338,6 +352,56 @@ export function cost(cwd: string, options: CostOptions = {}): CostReport {
   report.byModel = [...models.values()].sort(bySpend);
   report.byAgent = [...agents.values()].sort(bySpend);
   return report;
+}
+
+export interface RevertOptions extends CommandOptions {
+  /** Run ids, or unambiguous prefixes. */
+  runs?: readonly string[];
+  /** Undo everything one harness did. */
+  agent?: string;
+  /** Only runs from the last <n> hours. */
+  hours?: number;
+  /** Write the plan out. Without it, nothing is touched. */
+  apply?: boolean;
+  /** Write conflicted files too, with merge markers. */
+  conflicts?: boolean;
+  seal?: boolean;
+}
+
+export interface RevertReport {
+  repo: Repo;
+  initialized: boolean;
+  /** Null when DeepBlame is not set up here. */
+  plan: RevertPlan | null;
+  /** How the runs were chosen, for the message when nothing matched. */
+  selection: { runs: readonly string[]; agent: string | null; hours: number | null };
+}
+
+/**
+ * Undoes one agent's work and leaves everyone else's alone. A plan first,
+ * always: `apply` is the only thing that writes, and even then a conflicted
+ * file is left for the person unless they ask otherwise.
+ */
+export function revert(cwd: string, options: RevertOptions = {}): RevertReport {
+  const repo = openRepo(cwd);
+  const stateDir = readStateDir(repo.root);
+  const initialized = readLedger(repo).head !== null && stateDir.exists;
+  const selection = {
+    runs: options.runs ?? [],
+    agent: options.agent ?? null,
+    hours: options.hours ?? null,
+  };
+  if (!initialized) return { repo, initialized, plan: null, selection };
+  if (options.seal !== false) seal(repo, { now: options.now });
+
+  const plan = planRevert(repo, {
+    runs: options.runs,
+    agent: options.agent,
+    hours: options.hours,
+    now: options.now,
+  });
+  if (options.apply !== true || plan.runs.length === 0) return { repo, initialized, plan, selection };
+  return { repo, initialized, plan: applyRevert(repo, plan, { conflicts: options.conflicts }), selection };
 }
 
 export interface SealReport {
@@ -362,6 +426,9 @@ export interface HooksReport {
   harnesses: HarnessDetection[];
 }
 
+/** Which adapter a `hooks` command is about. */
+export type HookAgent = 'claude-code' | 'git' | 'codex' | 'opencode' | 'all';
+
 export function hooks(cwd: string, action: HooksAction, options: CommandOptions & HookOptions = {}): HooksReport {
   const repo = openRepo(cwd);
   const agent = options.agent ?? 'claude-code';
@@ -379,11 +446,16 @@ export function hooks(cwd: string, action: HooksAction, options: CommandOptions 
       if (options.turnCommand === undefined) throw new Error('no command to install');
       changes.push(installCodexNotify(repo.root, options.turnCommand, join(repo.root, STATE_DIR)));
     }
+    if (agent === 'opencode' || agent === 'all') {
+      if (options.hookCommand === undefined) throw new Error('no command to install');
+      changes.push(installOpenCodePlugin(repo.root, options.hookCommand));
+    }
   } else if (action === 'uninstall') {
     changes.push(uninstallClaudeCode(repo.root, { local: false }));
     changes.push(uninstallClaudeCode(repo.root, { local: true }));
     changes.push(uninstallGitHook(hooksDirOf(repo)));
     changes.push(uninstallCodexNotify(join(repo.root, STATE_DIR)));
+    changes.push(uninstallOpenCodePlugin(repo.root));
   }
   return {
     repo,

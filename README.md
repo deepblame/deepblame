@@ -18,11 +18,11 @@ DeepBlame records every agent turn into a ledger that lives beside your code, an
 - **What it cost** — tokens and money, per turn, per model, per agent.
 - **Undo just that** — surgical revert of one agent's work, without touching the rest.
 
-**It works with the tools you already use.** Claude Code is recorded turn by turn; Codex turn by turn through its own notifier; everything else — Cursor, Copilot, Windsurf, a cloud agent that opens a pull request — at commit level. One ledger for all of them, because a team runs more than one agent and no vendor's own history covers the others.
+**It works with the tools you already use.** Claude Code and OpenCode are recorded tool call by tool call; Codex turn by turn through its own notifier; everything else — Cursor, Copilot, Windsurf, a cloud agent that opens a pull request — at commit level, and anything at all can report to us with [one JSON line](#wiring-up-a-tool-we-have-not-heard-of). One ledger for all of them, because a team runs more than one agent and no vendor's own history covers the others.
 
 **Nothing leaves your machine.** The ledger is a separate git ref: your branches, working tree and index are never touched, no code is sent anywhere, and prompts are stored as hashes unless you ask otherwise.
 
-> **Status: pre-alpha, and already useful.** Everything above works today except surgical revert, which is next. See the [roadmap](#roadmap).
+> **Status: pre-alpha, and already useful.** Everything above works today. See the [roadmap](#roadmap) for what is next.
 
 ## Quick start
 
@@ -93,6 +93,18 @@ src/upload.ts  10 lines, 50% traced, 50% written by agents
 
 The percentage is not decoration. A line is claimed only when the state the run left is still in the ledger and the line can be followed from there to the file as it stands now; anything else is reported as unknown rather than guessed. `--why 7` prints the whole run behind one line.
 
+It holds up in the situations that usually break this kind of tool:
+
+| What happened to the file | What blame does |
+| --- | --- |
+| Nothing since the run | 100%, exact |
+| Edited elsewhere | 90%, the line came through |
+| Renamed — `git mv`, staged or committed | followed, and it says what the file used to be called |
+| A formatter reindented everything | 70%, "only the spacing has changed since" |
+| Somebody rewrote the line | not claimed at all |
+| Merged from another branch | the agent keeps the line; a merge commit writes nothing, so it records nothing |
+| The ledger lost the content | reported as unverifiable, never guessed |
+
 Every run also carries what it cost, read from the agent's own session log:
 
 ```sh
@@ -111,7 +123,38 @@ DeepBlame spend  ~/code/app
     claude-haiku-4-5-20251001   7 runs    $4.75
 ```
 
-Rates for models we do not know yet are left blank rather than guessed; add your own under `pricing` in `.deepblame/config.json` and the numbers appear.
+Rates for models we do not know yet are left blank rather than guessed; add your own under `pricing` in `.deepblame/config.json` and the numbers appear. When the agent reports its own price — OpenCode does — that figure is used instead of ours.
+
+## Undoing one agent's work
+
+The reason the ledger keeps file contents. Reverting an agent is not checking the file out as it was: that would throw away everything written since. DeepBlame knows exactly which lines the run changed, so it takes those back out and leaves the rest standing.
+
+```sh
+npx deepblame revert --agent claude-code
+```
+
+```
+Undoing 1 run by claude-code  ~/code/app
+
+  ✓ src/upload.ts  3 lines        comes out cleanly
+  · src/index.ts   12 lines       changed again after the agent, so both cannot hold
+
+Nothing has been written yet.
+Add --apply to undo 1 file.
+1 file cannot be undone cleanly. --apply --conflicts writes them with the usual <<<<<<< markers.
+```
+
+Nothing is written without `--apply`. A file the agent created but you have edited since is never deleted for you. A file whose recorded content the ledger no longer holds is reported, not guessed at. And `--run <id>` undoes one turn instead of everything an agent did.
+
+A worked example, which is the whole point:
+
+```
+before     an agent adds a retry loop to upload.js
+then       you rename the export in the same file
+revert     the retry loop is gone, your rename is still there
+```
+
+A plain three-way merge cannot do that — two changes on adjacent lines conflict. DeepBlame has something git does not: a record of which lines belong to the agent.
 
 ## What `init` does, and what it never does
 
@@ -128,10 +171,26 @@ Running `init` again is safe: it finds the existing ledger and repairs anything 
 | Tool | How | What you get |
 | --- | --- | --- |
 | **Claude Code** | its own hooks, installed by `init` | every prompt, tool call and edit, with model and cost |
+| **OpenCode** | a plugin, installed by `init` | every prompt, tool call and edit, with the tokens and price OpenCode itself reports |
 | **Codex** | `hooks install --agent codex`, then one line in your Codex config | one run per turn, with the files it changed |
 | **Anything else** — Cursor, Copilot, Windsurf, a cloud agent | `hooks install --agent git` | one run per commit, with the lines it changed |
 
 The fallbacks are coarser on purpose, and they say so: a commit knows the person who made it, never the tool that typed it. When a hooked agent and a commit both touch a line, the agent we actually watched keeps the credit.
+
+### Wiring up a tool we have not heard of
+
+There will always be one. So there is a documented way in, and it is one JSON object per call on stdin — no SDK, no dependency, nothing to keep in step with our releases:
+
+```sh
+echo '{"kind":"prompt","agent":"opencode","session":"s1","cwd":"'$PWD'","text":"add the retry"}' | deepblame-capture
+echo '{"kind":"write-pre","agent":"opencode","session":"s1","path":"src/upload.ts"}'            | deepblame-capture
+# ... your agent edits the file ...
+echo '{"kind":"write","agent":"opencode","session":"s1","path":"src/upload.ts","tool":"edit","old":"…","new":"…"}' | deepblame-capture
+echo '{"kind":"usage","agent":"opencode","session":"s1","model":"gpt-5","input":900,"output":120,"usd":0.02}'      | deepblame-capture
+echo '{"kind":"end","agent":"opencode","session":"s1"}'                                        | deepblame-capture
+```
+
+`kind` is one of `session`, `prompt`, `read`, `write-pre`, `write`, `tool`, `usage`, `end`. `write-pre` before the edit and `write` after it are what make line-level blame and surgical revert possible; everything else is optional. Anything unrecognised is ignored rather than rejected. Our own OpenCode plugin is forty lines on top of this, and it is written into your project where you can read it.
 
 ## How recording works
 
@@ -149,18 +208,19 @@ The fallbacks are coarser on purpose, and they say so: a commit knows the person
 | `deepblame show <run>` | Show one run in full |
 | `deepblame blame <file>` | Which agent wrote each line, with a confidence you can check |
 | `deepblame cost` | What the agents spent, by model and by agent |
+| `deepblame revert` | Undo one agent's work and nobody else's |
 | `deepblame seal` | Fold captured events into the ledger now |
 | `deepblame hooks <action>` | `install`, `uninstall` or `status` for capture hooks |
 
-Options: `-C <dir>` runs as if started in another directory, `--limit <n>` bounds `log`, `--json` prints machine-readable output, `--no-seal` lists only what is already in the ledger.
+Options: `-C <dir>` runs as if started in another directory, `--limit <n>` bounds `log`, `--days <n>` bounds `cost`, `--why <line>` explains one line in `blame`, `--run <id>` / `--agent <name>` / `--hours <n>` choose what `revert` undoes, `--apply` makes `revert` write, `--json` prints machine-readable output, `--no-seal` lists only what is already in the ledger.
 
 ## Roadmap
 
 1. **Foundation** — ledger, local state, agent detection. *Done.*
-2. **Capture** — Claude Code adapter, queue, sealer, model and cost accounting, a git fallback for every other tool, and a turn-level adapter for Codex. *Done.* A native OpenCode plugin is next.
-3. **`deepblame blame`** — line-by-line provenance with a confidence score. *First version done*: it survives edits elsewhere in the file and keeps the right owner when several agents touch one file. Merges, reformatting and rename tracking come next.
-4. **`deepblame revert --agent <id>`** — undo one agent's changes, with conflicts shown before anything is applied. The ledger now keeps the file contents this needs.
-5. Team dashboard, PR checks and signed audit reports.
+2. **Capture** — full adapters for Claude Code and OpenCode, a turn-level one for Codex, a git fallback that covers everything else, and a documented JSON format any other tool can use. Model and cost accounting, from the agent's own figures where it has them. *Done.*
+3. **`deepblame blame`** — line-by-line provenance with a confidence score you can check. *Done.* It survives edits elsewhere in the file, follows a file through renames, keeps the line when a formatter reindents the whole file (at a lower confidence, and it says so), and keeps the right owner when several agents and a person touch one file.
+4. **`deepblame revert`** — undo one agent's work and nobody else's, three-way against the lines the ledger says were theirs, with conflicts shown before anything is written. *Done.*
+5. **Next**: a team ledger — pushing runs to a shared remote, PR checks that say which agent wrote a diff, and signed audit reports.
 
 ## Development
 
@@ -170,7 +230,9 @@ pnpm check      # typecheck, tests and build
 pnpm smoke      # packs the CLI and records a turn in a throwaway repository
 ```
 
-The repository is a pnpm workspace: `packages/protocol` holds the event schema and the product name constants, `packages/core` the git plumbing, capture and sealer, and `packages/cli` the commands, bundled by esbuild into two dependency-free files — the CLI and the capture hot path.
+The repository is a pnpm workspace: `packages/protocol` holds the event schema and the product name constants, `packages/core` the git plumbing, capture, sealer, blame and revert, and `packages/cli` the commands, bundled by esbuild into two dependency-free files — the CLI, and the capture hot path as CommonJS because node's ESM loader costs about 20ms of somebody else's turn.
+
+Reading the ledger goes through a cache in `.deepblame/`, so `blame` on one file does not parse a thousand run records. It is only a cache: delete it and the next command rebuilds it from the ledger, which stays the only source of truth.
 
 ## License
 
