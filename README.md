@@ -200,6 +200,7 @@ Only the lines the change actually touches are counted; blaming whole files woul
 
 - Creates the ledger as a separate git ref, `refs/deepblame/ledger`. It is never checked out, so your branches, working tree and index stay exactly as they were.
 - Creates `.deepblame/` for local state. The folder ignores itself, so your `.gitignore` is not touched and the folder can never be committed by accident.
+- Puts a 20 KB copy of the capture program in `.deepblame/bin/` and points the hooks at it by full path. A hook is a line of text in somebody else's settings file that has to still work months later: naming a command and trusting `PATH` does not survive that, and `npx deepblame init` does not even survive the first five seconds, because npx puts the CLI on `PATH` only for the length of that one command. `deepblame doctor` checks that the hook it finds installed still resolves.
 - Detects the agent tools in the project (OpenCode, Claude Code, Codex, Cursor) and, for Claude Code, adds capture hooks to `.claude/settings.json`. Use `--no-hooks` to skip that, `--local` to keep the hooks out of git, and `deepblame hooks uninstall` to take them back out.
 - Never needs your git identity and never signs with your key, so a signing prompt can never block an agent.
 - Never sends code anywhere. Everything above is local.

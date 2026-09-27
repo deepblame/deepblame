@@ -6,6 +6,7 @@ import {
   GitError,
   NotARepositoryError,
   blame,
+  capturePath,
   commandOnPath,
   cost,
   doctor,
@@ -13,6 +14,7 @@ import {
   hooks,
   init,
   log,
+  openRepo,
   recordCommit,
   recordTurn,
   report,
@@ -180,11 +182,15 @@ export function main(argv: readonly string[], io: Io): number {
   try {
     switch (command) {
       case 'init': {
+        const wiring = values['no-hooks'] !== true;
+        const root = worktreeRoot(cwd);
         const result = init(cwd, {
           env: io.env,
-          hookCommand: hookCommand(io),
-          cursorCommand: cursorCommand(io),
-          noHooks: values['no-hooks'] === true,
+          hookCommand: wiring ? hookCommand(io, root) : '',
+          cursorCommand: wiring ? cursorCommand(io, root) : '',
+          captureSource: captureBundle(io),
+          version: pkg.version,
+          noHooks: !wiring,
           local: values.local === true,
         });
         io.stdout(values.json ? toJson(result) : formatInit(result, style));
@@ -298,12 +304,18 @@ export function main(argv: readonly string[], io: Io): number {
         if (!isHookAgent(agent)) {
           return usageError(io, `--agent takes claude-code, opencode, cursor, codex, git or all`);
         }
+        // Only an install writes a command anywhere, and only an install
+        // should therefore put a copy of the capture program in the worktree.
+        const writing = argument === 'install';
+        const root = worktreeRoot(cwd);
         const report = hooks(cwd, argument, {
           env: io.env,
-          hookCommand: hookCommand(io),
+          hookCommand: writing ? hookCommand(io, root) : '',
           commitCommand: commitCommand(io),
           turnCommand: turnCommand(io),
-          cursorCommand: cursorCommand(io),
+          cursorCommand: writing ? cursorCommand(io, root) : '',
+          captureSource: captureBundle(io),
+          version: pkg.version,
           local: values.local === true,
           agent,
         });
@@ -320,23 +332,52 @@ export function main(argv: readonly string[], io: Io): number {
 
 /**
  * How a hook should call us: the small capture binary, which loads none of
- * this. Preferably by name, otherwise the exact file next to this bundle
- * through the node that is running it, so a locally installed CLI keeps
- * recording after the shell that installed it is gone.
+ * this.
+ *
+ * The command goes into somebody else's settings file and has to still work
+ * months from now, in whatever shell their editor spawns. So a copy of the
+ * capture program is put inside the repository and the hook holds its full
+ * path — no PATH lookup, no npm cache, nothing that can quietly stop being
+ * true. `npx deepblame init` is exactly that case: it puts the CLI on PATH for
+ * the length of one command, long enough to look installed and not a second
+ * longer.
+ *
+ * Only when there is no bundle to copy — running from source in development —
+ * does this fall back to naming something and hoping.
  */
-function hookCommand(io: Io): string {
+function hookCommand(io: Io, root: string): string {
+  if (captureBundle(io) !== null) return `${quote(process.execPath)} ${quote(capturePath(root))}`;
+
   const capture = `${CLI_NAME}-capture`;
   if (commandOnPath(capture, io.env)) return capture;
-  const entry = io.entry;
-  if (entry !== undefined && entry !== '') {
-    const sibling = entry.endsWith('.mjs') ? join(dirname(entry), 'capture.cjs') : `${entry}-capture`;
-    if (existsSync(sibling)) return `${quote(process.execPath)} ${quote(sibling)}`;
-  }
   if (commandOnPath(CLI_NAME, io.env)) return `${CLI_NAME} capture --agent claude-code`;
+  const entry = io.entry;
   if (entry !== undefined && entry !== '') {
     return `${quote(process.execPath)} ${quote(entry)} capture --agent claude-code`;
   }
   return `npx --yes --package=${CLI_NAME} ${capture}`;
+}
+
+/**
+ * The worktree the hook path must be written against: the state directory sits
+ * at the top of the repository, not wherever the command happened to be run.
+ * Falls back to here when this is not a repository, since the command that
+ * follows will report that properly.
+ */
+function worktreeRoot(cwd: string): string {
+  try {
+    return openRepo(cwd).root;
+  } catch {
+    return cwd;
+  }
+}
+
+/** The capture bundle shipped beside this one, when there is one. */
+function captureBundle(io: Io): string | null {
+  const entry = io.entry;
+  if (entry === undefined || entry === '') return null;
+  const sibling = entry.endsWith('.mjs') ? join(dirname(entry), 'capture.cjs') : `${entry}-capture`;
+  return existsSync(sibling) ? sibling : null;
 }
 
 /**
@@ -381,8 +422,8 @@ function isHookAgent(value: string): value is HookAgent {
 }
 
 /** Cursor sends its own payload shape, so its hook says whose it is. */
-function cursorCommand(io: Io): string {
-  return `${hookCommand(io)} --agent cursor`;
+function cursorCommand(io: Io, root: string): string {
+  return `${hookCommand(io, root)} --agent cursor`;
 }
 
 function isHooksAction(value: string): value is HooksAction {

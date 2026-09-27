@@ -493,6 +493,37 @@ function isOurs(hook: unknown): boolean {
   return typeof command === 'string' && isOurCommand(command);
 }
 
+/**
+ * The capture commands actually written into the agents' settings, so `doctor`
+ * can check they still resolve to something. A hook is a line of text in
+ * someone else's file: it can be right the day it is written and wrong the
+ * next, and nothing about capturing tells you — it never prints.
+ */
+export function installedCommands(root: string): { file: string; command: string }[] {
+  const found: { file: string; command: string }[] = [];
+  const files = [claudeSettingsPath(root), claudeSettingsPath(root, { local: true }), cursorHooksPath(root)];
+  for (const file of files) {
+    if (!existsSync(file)) continue;
+    let hooks: Record<string, unknown>;
+    try {
+      hooks = asRecord(readSettings(file)['hooks']);
+    } catch {
+      continue;
+    }
+    for (const entries of Object.values(hooks)) {
+      for (const entry of asArray(entries)) {
+        for (const hook of [entry, ...asArray(entry['hooks'])]) {
+          const command = asRecord(hook)['command'];
+          if (typeof command === 'string' && isOurCommand(command) && !found.some((one) => one.command === command)) {
+            found.push({ file, command });
+          }
+        }
+      }
+    }
+  }
+  return found;
+}
+
 function matcherOf(group: Record<string, unknown>): string {
   const matcher = group['matcher'];
   return typeof matcher === 'string' ? matcher : '';

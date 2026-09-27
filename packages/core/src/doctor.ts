@@ -1,9 +1,9 @@
 import { existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { QUEUE_FILE, SEAL_LOCK_FILE, STATE_DIR } from '@deepblame/protocol';
-import { detectHarnesses, type HarnessDetection } from './detect';
+import { commandOnPath, detectHarnesses, type HarnessDetection } from './detect';
 import { tryGit } from './git';
-import type { HookFile } from './hooks';
+import { installedCommands, type HookFile } from './hooks';
 import { readLedger } from './ledger';
 import type { Repo } from './repo';
 import { hydrate, readIndex, type IndexedRun } from './runindex';
@@ -111,7 +111,24 @@ export function diagnose(repo: Repo, options: DoctorOptions): DoctorReport {
         },
   );
 
-  // 5. An agent that is here but reports to nobody. The usual real problem.
+  // 5. The hook is a line of text in somebody else's file. Does it still run?
+  // This is the check that catches the whole family of silent failures, the
+  // worst of which looks completely healthy: `npx deepblame init` puts the CLI
+  // on PATH for the length of that one command, so a hook naming it is correct
+  // while init verifies it and dead by the time an agent fires it.
+  const broken = installedCommands(repo.root).filter((hook) => !resolves(hook.command, options.env));
+  if (broken.length > 0) {
+    checks.push({
+      name: 'hook',
+      status: 'fail',
+      detail: `${broken.length === 1 ? 'a hook calls' : 'hooks call'} ${broken
+        .map((hook) => `'${firstWord(hook.command)}'`)
+        .join(', ')}, which is not there — nothing is being recorded`,
+      fix: 'deepblame init',
+    });
+  }
+
+  // 6. An agent that is here but reports to nobody. The usual real problem.
   const missed = harnesses.filter((harness) => harness.found && !coveredBy(installed, harness));
   if (missed.length > 0) {
     checks.push({
@@ -129,7 +146,7 @@ export function diagnose(repo: Repo, options: DoctorOptions): DoctorReport {
     });
   }
 
-  // 6. Events that went in but never came out.
+  // 7. Events that went in but never came out.
   const queuePath = join(stateDir, QUEUE_FILE);
   const queueAge = ageOf(queuePath, now);
   if (state.queued > 0 && queueAge !== null && queueAge > STALE_QUEUE_MS) {
@@ -148,7 +165,7 @@ export function diagnose(repo: Repo, options: DoctorOptions): DoctorReport {
     });
   }
 
-  // 7. A lock left behind by a sealer that died.
+  // 8. A lock left behind by a sealer that died.
   const lockAge = ageOf(join(stateDir, SEAL_LOCK_FILE), now);
   if (lockAge !== null && lockAge > STALE_LOCK_MS) {
     checks.push({
@@ -159,7 +176,7 @@ export function diagnose(repo: Repo, options: DoctorOptions): DoctorReport {
     });
   }
 
-  // 8. Whether the evidence blame and revert rely on is still there.
+  // 9. Whether the evidence blame and revert rely on is still there.
   if (runs.length > 0) {
     const missing = missingContent(repo, runs.slice(0, SAMPLE));
     checks.push(
@@ -212,6 +229,35 @@ function missingContent(repo: Repo, entries: readonly IndexedRun[]): number {
   let lost = 0;
   for (const oids of wanted.values()) if (oids.some((oid) => !present.has(oid))) lost += 1;
   return lost;
+}
+
+/**
+ * Would this command line find anything to run?
+ *
+ * Not by running it — a hook runs an agent's capture path and must never be
+ * fired to satisfy a check. Only the program is looked at: a path has to exist,
+ * a bare name has to be on PATH. `npx …` is taken on trust, since deciding it
+ * would mean going to the network.
+ */
+function resolves(command: string, env: NodeJS.ProcessEnv | undefined): boolean {
+  const program = firstWord(command);
+  if (program === '') return false;
+  if (program === 'npx' || program.endsWith('/npx') || program.endsWith('\\npx')) return true;
+  if (/[\\/]/.test(program)) {
+    if (!existsSync(program)) return false;
+    // `node /path/to/capture.cjs` — the script has to be there too.
+    const script = firstWord(command.slice(command.indexOf(program) + program.length));
+    return script === '' || !/\.[cm]?js$/.test(script) || existsSync(script);
+  }
+  return commandOnPath(program, env);
+}
+
+/** The first shell word, honouring the quoting we write ourselves. */
+function firstWord(command: string): string {
+  const text = command.trim();
+  if (text.startsWith('"')) return text.slice(1, text.indexOf('"', 1) === -1 ? undefined : text.indexOf('"', 1));
+  if (text.startsWith("'")) return text.slice(1, text.indexOf("'", 1) === -1 ? undefined : text.indexOf("'", 1));
+  return text.split(/\s+/)[0] ?? '';
 }
 
 function coveredBy(installed: readonly HookFile[], harness: HarnessDetection): boolean {

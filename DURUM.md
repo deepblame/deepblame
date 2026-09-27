@@ -408,6 +408,28 @@ Yükleme sonrası CI kendiliğinden çalıştı ve **altı işin hepsi geçti** 
 
 **Sürüm 0.3.0.** npm'deki 0.2.0'da `push` / `pull` / `report` **yok**. Kendi verdiğimiz GitHub Action örneği `npx deepblame@latest report` çağırıyor; yani bugün onu kopyalayan biri hata alırdı. Yayınlanması şart, kozmetik bir sürüm artışı değil. Eklenti de aynı numarada tutuldu (0.3.0) — iki ayrı numara takip etmeye değmez.
 
+### 28 Eylül — 0.3.1: npx tuzağı
+
+**Bulunan hata, bugüne kadarki en kötüsü.** 0.3.0'ı yayınladıktan sonra paketi npm'den indirip README'deki adımları **birebir** uyguladım. Şu çıktı:
+
+`npx deepblame init` çalışırken npx, CLI'ı geçici olarak PATH'e koyuyor. `init` de "`deepblame-capture` PATH'te var" diye görüp hook'a o ismi yazıyor. npx bitince o isim yok oluyor. Sonuç:
+
+- Kullanıcı README'nin ilk komutunu çalıştırıyor
+- Ekranda yeşil "Recording is on" yazıyor
+- Ajan çalışıyor, **hiçbir şey kaydedilmiyor**
+- `doctor` bile "✓ recording" diyor, çünkü sadece ayar dosyasında bizim hook'umuz var mı diye bakıyordu, komutun çözümlenip çözümlenmediğine bakmıyordu
+
+Yakalayıcı asla ekrana bir şey yazmaz ve her zaman 0 ile çıkar — sıcak yolda doğru olan bu, ama burada acımasız: hata tamamen sessiz. Sıfır dış kullanıcımız var ve README'nin ilk komutu bu; yani gelecek **herkes** bu duvara çarpardı ve hiçbiri nedenini anlamazdı.
+
+**İki cevap verildi.**
+
+1. **Hook artık isim çağırmıyor, dosya çağırıyor.** `init`, 20 KB'lık yakalayıcıyı deponun kendi `.deepblame/bin/` klasörüne kopyalıyor ve hook'a tam yolunu yazıyor. PATH'e, npm önbelleğinin ömrüne, CLI'ın kurulu kalmasına bağımlı hiçbir şey kalmadı. Boş bir ortamda (`env -i`, PATH yok) gerçekten denendi: hook çalışıyor, olay kuyruğa düşüyor, `blame` doğru cevabı veriyor. Bedeli: kopya CLI yükseltilince kendiliğinden güncellenmiyor, o yüzden yanına sürümü yazılıyor ve `init` her çalıştığında tazeleniyor.
+2. **`doctor` artık hook komutunun gerçekten çözümlendiğini kontrol ediyor** — çalıştırmadan: yol ise dosya var mı, isim ise PATH'te mi. Asıl kıymetli kısım bu. Bu ailenin bundan sonraki bütün hataları (depo taşındı, kopya silindi, node yolu değişti) sessiz olmaktan çıkıp `✗ hook  ... nothing is being recorded` satırına dönüyor, ve `doctor` 1 ile çıkıyor.
+
+Ders: **yayınlanan paketi indirip kullanıcının adımlarını birebir uygulamadan "çalışıyor" denmiyor.** 228 test bu hatayı göremezdi, çünkü testler yakalayıcıyı zaten doğru yoldan çağırıyordu. Hatayı gören tek şey gerçek `npx` oldu.
+
+**Testler:** 228.
+
 ## 17. Açık sorular
 
 - **Claude Code hook şeması kendi bilgimizden yazıldı** (dokümantasyona erişilemedi: alan adı izin istedi, kullanıcı reddetti). Alan adları (`hook_event_name`, `tool_name`, `tool_input.file_path`, `old_string`/`new_string`, `session_id`) doğru biliniyor ama **gerçek bir Claude Code oturumunda henüz doğrulanmadı.** İlk dogfood turunda kontrol edilecek; yanlış alan varsa `capture.ts` içinde tek yerde düzelir.

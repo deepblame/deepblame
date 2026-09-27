@@ -42,3 +42,14 @@ export const RUN_INDEX_VERSION = 1;
  * still the line an agent wrote, and no way to put it back.
  */
 export const BLOBS_DIR = 'blobs';
+/**
+ * A copy of the capture program, kept inside the repository so the hooks an
+ * agent runs never depend on a name being on PATH. `npx deepblame init` puts
+ * the CLI on PATH only for as long as that one command runs, so a hook written
+ * to call it by name works while `init` checks it and is gone by the time an
+ * agent fires it — silently, because capture never prints and always exits 0.
+ */
+export const BIN_DIR = 'bin';
+export const CAPTURE_FILE = 'capture.cjs';
+/** What version the copy came from, so a stale one can be spotted. */
+export const CAPTURE_STAMP = 'capture.json';

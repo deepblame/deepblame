@@ -89,6 +89,14 @@ export {
   openCodePluginInstalled,
   uninstallOpenCodePlugin,
 } from './hooks';
+export {
+  capturePath,
+  readStamp,
+  vendorCapture,
+  type VendoredCapture,
+  type VendorResult,
+} from './vendor';
+export { installedCommands } from './hooks';
 export { hostId, sessionUuid, uuidV5, worktreeId } from './ids';
 export {
   blame,

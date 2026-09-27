@@ -101,6 +101,7 @@ Any other tool can report with one JSON object per call on stdin — no SDK, no 
 
 - Creates the ledger as a separate git ref, `refs/deepblame/ledger`. It is never checked out, so your branches, working tree and index stay exactly as they were.
 - Creates `.deepblame/` for local state. The folder ignores itself, so your `.gitignore` is not touched.
+- Copies the small capture program into `.deepblame/bin/` and points the hooks at it by full path, so recording does not depend on anything staying on `PATH`.
 - Detects the agents in the project and wires up the ones it can. Use `--no-hooks` to skip that.
 - Never needs your git identity and never signs with your key.
 - Never sends anything anywhere.

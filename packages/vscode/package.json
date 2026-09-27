@@ -1,7 +1,7 @@
 {
   "name": "deepblame-vscode",
   "displayName": "DeepBlame",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
   "description": "Shows which AI agent wrote each line, and why, beside the code.",
   "publisher": "deepblame",

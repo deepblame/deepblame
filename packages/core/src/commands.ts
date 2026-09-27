@@ -37,6 +37,7 @@ import { findRun, indexedRuns, listRuns, type LedgerRun } from './runs';
 import { appendRuns, seal, type SealResult } from './seal';
 import { pullLedger, pushLedger, type ShareResult } from './share';
 import { ensureStateDir, readStateDir, type StateDirInfo } from './state';
+import { vendorCapture } from './vendor';
 import { markWorktree, recordWorktreeTurn } from './worktree';
 
 export interface CommandOptions {
@@ -59,6 +60,14 @@ export interface HookOptions {
   turnCommand?: string;
   /** How Cursor's hooks should call us; they send their own payload shape. */
   cursorCommand?: string;
+  /**
+   * The capture bundle to copy into the worktree, so the hooks call a file
+   * that is certainly there rather than a name that might be on PATH. See
+   * `vendor.ts` for why the difference matters more than it sounds.
+   */
+  captureSource?: string | null;
+  /** The CLI version, recorded beside the copy so a stale one can be spotted. */
+  version?: string | null;
 }
 
 /** Where git keeps this repository's hooks, honouring core.hooksPath. */
@@ -138,6 +147,10 @@ export function init(cwd: string, options: CommandOptions & HookOptions = {}): I
     hooks,
   };
   if (options.noHooks !== true && options.hookCommand !== undefined) {
+    // Before a hook names the file, the file has to be there. After the state
+    // directory, so its self-ignore is written first and `init` can still
+    // report honestly whether it created the directory.
+    vendorCapture(repo.root, options.captureSource ?? null, options.version ?? null, now);
     if (claudeCode?.found === true) {
       hooks.push(installClaudeCode(repo.root, options.hookCommand, { local: options.local }));
     }
@@ -514,6 +527,8 @@ export function hooks(cwd: string, action: HooksAction, options: CommandOptions 
   const agent = options.agent ?? 'claude-code';
   const changes: HookChange[] = [];
   if (action === 'install') {
+    // Same reason as in `init`: the file the hooks name has to exist first.
+    vendorCapture(repo.root, options.captureSource ?? null, options.version ?? null, options.now ?? new Date());
     if (agent === 'claude-code' || agent === 'all') {
       if (options.hookCommand === undefined) throw new Error('no command to install');
       changes.push(installClaudeCode(repo.root, options.hookCommand, { local: options.local }));
