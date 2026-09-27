@@ -1,0 +1,4 @@
+# Copied in by the build, so it is in the package but not in the history twice.
+LICENSE
+# Packaged extensions are built, never committed.
+*.vsix
