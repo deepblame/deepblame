@@ -445,6 +445,45 @@ Bu üç madde birleşince, bu ailenin hataları artık her yayından önce CI'da
 
 **Testler:** 231. `smoke` üç kontrol daha yapıyor.
 
+### 28 Eylül (akşam) — rekabet araştırması ve Agent Trace
+
+**Pazarı gerçekten araştırdık ve tez kısmen çöktü.** Faz 0'da "kategoride hâkim oyuncu yok" diye seçmiştik; **bu artık doğru değil.**
+
+Bulunanlar:
+- **[Agent Trace](https://agent-trace.dev)** — Cursor'ın Ocak 2026'da yayınladığı RFC. Satır seviyesinde köken takibi için ortak format. Arkasında **Anthropic, Cognition, Cloudflare, Vercel, Google (Jules)** var. Yani desteklediğimiz dört ajandan üçünün şirketi ortak bir dil üzerinde anlaşmış, biz kendi formatımızı icat etmişiz.
+- **git-ai** — bizimkiyle neredeyse aynı ürün, ~2.800 yıldız. Kurucuları **11 Eylül 2026'da OpenAI'ın Codex ekibine katıldı.** Biz 27 Eylül'de yayınladık, yani kategorinin lideri biz çıkmadan 16 gün önce satın alındı.
+- **brain0** (~131 yıldız, `brain0 rewind` var), **agentdiff** (iki ayrı proje, biri ölü), **whogitit**, **Origin**, ve npm'de Şubat–Temmuz arası açılıp bırakılmış ~8 paket.
+- **Crash Override** — 41,3M$ yatırım, Toyota/Amazon/Santander. Ama farklı katman: uç nokta ajanı, satır değil eylem takibi, CISO'ya satılıyor. Bizim npm kurulumlarımız için yarışmıyor.
+
+Talep tarafı gerçek ama şeklini bilmek lazım: GitLab'in 1.528 kişilik araştırması (23 Haziran 2026) **%43'ün AI kodunu insan kodundan ayırt edemediğini**, %91'in 12 ay içinde yönetişim aracına yatırım düşündüğünü söylüyor. Ama bunu hisseden kişi npm'den araç kuran geliştirici değil, VP/CISO. Geliştirici tarafı köken takibine soğuk: Copilot `Co-authored-by` eklemeye başlayınca 70+ öfkeli yorumla geri adım attı. Bu konuda üç ayrı Show HN yapıldı: 6, 5 ve 3 puan.
+
+**Verilen karar: devam, ama iki değişiklikle.**
+
+1. **Agent Trace'i uyguladık** (aşağıda). Kendi formatımızda diretmek, okunamayan bir ada olmak demekti.
+2. **Konumlandırma geri almaya kayıyor.** Köken takibi artık herkeste var; *bir ajanın işini cerrahi olarak geri almak* yok. Ne şartname bundan bahsediyor, ne git-ai'da var. brain0'ın `rewind`'ı anlık görüntüye dönüyor — bizimki bir ajanın satırlarını çıkarıp diğerlerinin işini yerinde bırakıyor. Kategorinin sahipsiz tek parçası bu.
+
+**Agent Trace uygulaması (`packages/protocol/src/trace.ts` + `packages/core/src/agenttrace.ts`).**
+
+Şema protokol paketinde (zod orada, diğer tel formatlarıyla aynı yerde), git gerektiren dönüştürme core'da.
+
+- **`trace export`** — her run bir kayıt. Doğal eşleşme: bir kaydın tek aracı, tek anı, tek revizyonu var; bir run'ın da. Aralıklar run'ın bittiği revizyona göre veriliyor, şartnamenin `vcs` ile kastettiği bu. Her aralığa kapsadığı metnin sha256'sı ekleniyor.
+- **Şartnamenin kendi örneği kendi şemasını geçmiyor:** örnekte `"version": "0.1.0"` yazıyor ama desen `^[0-9]+\.[0-9]+$`. Biz **`"0.1"`** yazıyoruz, okurken üç parçalıyı da kabul ediyoruz.
+- **`trace import`** — başkasının kaydı, bizim deftere `external` harness'ı olarak giriyor. **Aracın kendi adıyla değil**, çünkü biz onu izlemedik, bize söylendi.
+
+**Kritik tasarım kararı (26): rapor edileni izlenmiş gibi göstermiyoruz.**
+- `blame` bunu `reported` sebebiyle, **%80** güvenle gösteriyor ve raporlayan aracı adıyla söylüyor: `cursor (reported) ... another tool's trace says so; we did not watch it happen`
+- İzlediğimiz bir run, aynı satırı rapor edilmiş bir iddiadan **geri alıyor** — gördüğümüz, duyduğumuzdan üstün
+- **`revert` bunlara asla dokunmuyor.** Trace'te önceki hâl yok; üstelik `pre_blob_sha: null` bizim şemamızda "dosyayı bu run oluşturdu" demek, yani koruma olmasa geri alma dosyayı **silmeye** kalkardı. Açık bir engel konuldu.
+
+**İkinci kritik karar: kanıtlanamayan iddia alınmıyor.** Bir iddia ancak git'in hâlâ gösterebildiği bir dosya hâline bağlanabiliyorsa içeri giriyor:
+1. Kaydın işaret ettiği revizyon bizde varsa → o revizyondaki dosya, sonrası normal sürüklenme takibiyle
+2. Yoksa ama aralığın `content_hash`'i bugünkü dosyadaki satırlarla tutuyorsa → şartnamenin tam da bunun için koyduğu alan; **farklı bir klondan gelen trace bu yolla doğru yere oturuyor**
+3. İkisi de değilse → sayılıp bırakılıyor, "şu kadar aralık bu deponun hiçbir hâline bağlanamadı" deniyor
+
+Gerçekten denendi: hiç ortak geçmişi olmayan ikinci bir depoya Cursor formatında bir kayıt verildi, sadece içerik hash'iyle eşleşip doğru satıra oturdu.
+
+**Testler:** 255. 24'ü Agent Trace için, ve bunların biri yayınlanmış şemanın **elle yazılmış katı bir kopyası** — `additionalProperties: false` dahil. Yani uydurduğumuz bir alan, başkasının ayrıştırıcısında değil bizim testimizde patlıyor.
+
 ## 17. Açık sorular
 
 - **Claude Code hook şeması kendi bilgimizden yazıldı** (dokümantasyona erişilemedi: alan adı izin istedi, kullanıcı reddetti). Alan adları (`hook_event_name`, `tool_name`, `tool_input.file_path`, `old_string`/`new_string`, `session_id`) doğru biliniyor ama **gerçek bir Claude Code oturumunda henüz doğrulanmadı.** İlk dogfood turunda kontrol edilecek; yanlış alan varsa `capture.ts` içinde tek yerde düzelir.

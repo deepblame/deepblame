@@ -23,6 +23,8 @@ import {
   share,
   show,
   status,
+  traceExport,
+  traceImport,
   type CaptureBundle,
   type HookAgent,
   type HooksAction,
@@ -44,6 +46,8 @@ import {
   formatSeal,
   formatShow,
   formatStatus,
+  formatTraceExport,
+  formatTraceImport,
   makeStyle,
 } from './format';
 
@@ -79,6 +83,8 @@ Usage
   ${CLI_NAME} pull             take in the team's ledger and join it
   ${CLI_NAME} doctor           check that recording is actually working
   ${CLI_NAME} gc               age old file contents out of the ledger
+  ${CLI_NAME} trace <action>   exchange attribution with other tools in the
+                   ${' '.repeat(CLI_NAME.length)}   Agent Trace format: export | import <path...>
   ${CLI_NAME} seal             fold captured events into the ledger now
   ${CLI_NAME} hooks <action>   install, uninstall or check capture hooks
                    ${' '.repeat(CLI_NAME.length)}   --agent claude-code | opencode | cursor |
@@ -102,6 +108,7 @@ Options
   --base <ref>    what to compare against in report
   --remote <name> which remote to share the ledger with (default origin)
   --markdown      report as markdown, for a pull request comment
+  --out <dir>     where trace export writes (default .deepblame/trace)
   --json          machine-readable output
   -h, --help      show this help
   -v, --version   print the version
@@ -138,6 +145,7 @@ export function main(argv: readonly string[], io: Io): number {
         local: { type: 'boolean' },
         'no-hooks': { type: 'boolean' },
         'no-seal': { type: 'boolean' },
+        out: { type: 'string' },
         json: { type: 'boolean' },
         help: { type: 'boolean', short: 'h' },
         version: { type: 'boolean', short: 'v' },
@@ -157,11 +165,13 @@ export function main(argv: readonly string[], io: Io): number {
     io.stdout(HELP);
     return EXIT.ok;
   }
-  if (extra !== undefined) return usageError(io, `unexpected argument '${extra}'`);
+  // `trace import` takes a list of files, so it is the one command that may
+  // run past two positionals.
+  if (extra !== undefined && command !== 'trace') return usageError(io, `unexpected argument '${extra}'`);
 
   const cwd = values.cwd === undefined ? io.cwd : resolve(io.cwd, values.cwd);
   const style = makeStyle(io.color && !values.json);
-  const takesArgument = command === 'show' || command === 'hooks' || command === 'blame';
+  const takesArgument = command === 'show' || command === 'hooks' || command === 'blame' || command === 'trace';
   if (!takesArgument && argument !== undefined) return usageError(io, `unexpected argument '${argument}'`);
 
   let limit = DEFAULT_LIMIT;
@@ -263,6 +273,27 @@ export function main(argv: readonly string[], io: Io): number {
         const shared = share(cwd, command, { env: io.env, remote: values.remote });
         io.stdout(values.json ? toJson(shared.result) : formatShare(shared, style));
         return EXIT.ok;
+      }
+      case 'trace': {
+        if (argument === undefined) return usageError(io, `${CLI_NAME} trace needs export or import`);
+        if (argument === 'export') {
+          const report = traceExport(cwd, {
+            env: io.env,
+            write: values.json !== true,
+            out: values.out ?? null,
+            seal: values['no-seal'] !== true,
+          });
+          io.stdout(values.json ? toJson(report.records) : formatTraceExport(report, style));
+          return EXIT.ok;
+        }
+        if (argument === 'import') {
+          const paths = positionals.slice(2);
+          if (paths.length === 0) return usageError(io, `${CLI_NAME} trace import needs a file or a directory`);
+          const report = traceImport(cwd, paths, { env: io.env });
+          io.stdout(values.json ? toJson(report) : formatTraceImport(report, style));
+          return report.rejected.length > 0 && report.imported === 0 ? EXIT.failure : EXIT.ok;
+        }
+        return usageError(io, `unknown trace action '${argument}'`);
       }
       case 'doctor': {
         const report = doctor(cwd, { env: io.env });

@@ -25,6 +25,8 @@ export type BlameReason =
   | 'survived'
   /** The line only differs in spacing now: a formatter has been through. */
   | 'reformatted'
+  /** Another tool's Agent Trace says it wrote this. We did not watch it happen. */
+  | 'reported'
   /** Nobody we recorded wrote this line: a human, an unrecorded tool, or history. */
   | 'unknown';
 
@@ -32,6 +34,7 @@ export type BlameReason =
 const CONFIDENCE: Record<Exclude<BlameReason, 'unknown'>, number> = {
   exact: 1,
   survived: 0.9,
+  reported: 0.8,
   reformatted: 0.7,
 };
 
@@ -161,14 +164,26 @@ export function blameFile(repo: Repo, path: string): BlameResult {
           reason = 'reformatted';
         }
         if (now === null || now < 1 || now > total) continue;
+        // An imported trace is somebody else's word for it. The lines are
+        // followed the same way, but the answer is never dressed up as
+        // something we saw happen — and a weak mapping still drags it down,
+        // so a reported line a formatter has been through is the lower of the
+        // two rather than a flat 80%.
+        let sureness = CONFIDENCE[reason];
+        if (run.harness.name === 'external') {
+          sureness = Math.min(sureness, CONFIDENCE.reported);
+          reason = 'reported';
+        }
         // Newest first, so the first claim on a line stands — with one
-        // exception: a commit (the fallback for tools we cannot hook) names a
-        // person, never a tool, so an agent we actually watched writing the
-        // line takes it back off the commit, however much older it is.
+        // exception: what we actually watched outranks what we were only told
+        // or can only infer. A commit names a person, never a tool, and a
+        // trace names a tool we never saw run; an agent we watched writing the
+        // line takes it back off either, however much older it is.
         const held = attributed.get(now);
-        const watched = run.harness.name !== 'git';
-        if (held !== undefined && !(watched && held.run.harness.name === 'git')) continue;
-        attributed.set(now, { run, confidence: CONFIDENCE[reason], reason });
+        const watched = run.harness.name !== 'git' && run.harness.name !== 'external';
+        const secondhand = held !== undefined && (held.run.harness.name === 'git' || held.run.harness.name === 'external');
+        if (held !== undefined && !(watched && secondhand)) continue;
+        attributed.set(now, { run, confidence: sureness, reason });
         if (watched) settled += 1;
       }
     }

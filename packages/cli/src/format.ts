@@ -1,6 +1,8 @@
 import { CLI_NAME, LEDGER_REF, PRODUCT_NAME, STATE_DIR } from '@deepblame/protocol';
 import { OPENCODE_PLUGIN } from '@deepblame/core';
 import type {
+  TraceExportReport,
+  TraceImportReport,
   BlameReport,
   BlameSpan,
   CostReport,
@@ -13,6 +15,7 @@ import type {
   GcReport,
   LogReport,
   PrReport,
+  RevertPlan,
   RevertReport,
   ShareReport,
   SealResult,
@@ -256,7 +259,11 @@ export function formatBlameLine(report: BlameReport, line: number, s: Style): st
 
 /** A commit knows the person who made it; an agent run knows the tool. */
 function who(run: NonNullable<BlameSpan['run']>): string {
-  return run.harness.name === 'git' && run.actor.type === 'human' ? `git (${run.actor.id})` : run.harness.name;
+  if (run.harness.name === 'git' && run.actor.type === 'human') return `git (${run.actor.id})`;
+  // `external` is our bookkeeping, not an answer. The answer is the tool whose
+  // trace said so, and that it said so rather than us watching it.
+  if (run.harness.name === 'external') return `${run.actor.id} (reported)`;
+  return run.harness.name;
 }
 
 /** Says the number and what it means: a score with no explanation is noise. */
@@ -265,6 +272,7 @@ function confidence(value: number, reason: string): string {
   if (reason === 'exact') return `${percent}  the file is exactly as the run left it`;
   if (reason === 'survived') return `${percent}  changed elsewhere since, this line came through`;
   if (reason === 'reformatted') return `${percent}  only the spacing has changed since, so probably still theirs`;
+  if (reason === 'reported') return `${percent}  another tool's trace says so; we did not watch it happen`;
   return percent;
 }
 
@@ -328,6 +336,18 @@ const REVERT_NOTE: Record<string, string> = {
   binary: 'not text, and changed since, so there is nothing to merge',
 };
 
+/**
+ * Same status, different reason. An imported trace was never going to be
+ * revertible — the format carries no before-image — so saying the ledger lost
+ * something would send someone looking for a fault that is not there.
+ */
+function revertNote(file: RevertPlan['files'][number], run: RevertPlan['runs'][number] | undefined): string {
+  if (file.status === 'unverifiable' && run?.harness.name === 'external') {
+    return 'reported by another tool, which records no before-image to put back';
+  }
+  return REVERT_NOTE[file.status] ?? file.status;
+}
+
 export function formatRevert(report: RevertReport, s: Style): string {
   if (!report.initialized) {
     return lines(`${PRODUCT_NAME} is not set up here: ${report.repo.root}`, `Run ${s.bold(`${CLI_NAME} init`)} to start.`);
@@ -361,7 +381,7 @@ export function formatRevert(report: RevertReport, s: Style): string {
           : '',
     note:
       file.write?.kind !== 'delete'
-        ? (REVERT_NOTE[file.status] ?? file.status)
+        ? revertNote(file, plan.runs[0])
         : file.status === 'conflicted'
           ? 'the agent created it, but you have changed it since'
           : 'the agent created it, so it goes',
@@ -746,4 +766,64 @@ function short(oid: string | null): string {
 
 function lines(...rows: string[]): string {
   return `${rows.join('\n')}\n`;
+}
+
+export function formatTraceExport(report: TraceExportReport, s: Style): string {
+  if (!report.initialized) {
+    return lines(`${PRODUCT_NAME} is not set up here: ${report.repo.root}`, `Run ${s.bold(`${CLI_NAME} init`)} to start.`);
+  }
+  if (report.records.length === 0) {
+    return lines('Nothing to export yet: no recorded run has written a file.');
+  }
+  const files = new Set<string>(report.records.flatMap((record) => record.files.map((file) => file.path)));
+  const rows = [
+    `${s.bold(`${plural(report.records.length, 'Agent Trace record')}`)}  ${s.dim(plural(files.size, 'file'))}`,
+    '',
+  ];
+  if (report.dir !== null) {
+    rows.push(`  written to  ${report.dir}`);
+  } else {
+    rows.push(s.dim('  Nothing was written; this is the --json view.'));
+  }
+  if (report.skipped > 0) {
+    rows.push(s.dim(`  ${plural(report.skipped, 'run')} had no line ranges to report.`));
+  }
+  rows.push('', s.dim('The format is the Agent Trace RFC, which Cursor, Anthropic and others read.'));
+  return lines(...rows);
+}
+
+export function formatTraceImport(report: TraceImportReport, s: Style): string {
+  if (!report.initialized) {
+    return lines(`${PRODUCT_NAME} is not set up here: ${report.repo.root}`, `Run ${s.bold(`${CLI_NAME} init`)} to start.`);
+  }
+  const rows: string[] = [];
+  if (report.imported > 0) {
+    const who = report.tools.length === 0 ? '' : `  ${s.dim(`from ${report.tools.join(', ')}`)}`;
+    rows.push(`${s.bold(`Took in ${plural(report.imported, 'record')}`)}${who}`);
+  } else if (report.read > 0) {
+    rows.push('Nothing new: every record was already in the ledger.');
+  } else {
+    rows.push('No Agent Trace records found.');
+  }
+
+  if (report.unresolved > 0) {
+    rows.push(
+      '',
+      `  ${s.dim(`${plural(report.unresolved, 'range')} could not be tied to any state of this repository,`)}`,
+      `  ${s.dim('so they were left out rather than guessed at.')}`,
+    );
+  }
+  if (report.rejected.length > 0) {
+    rows.push('', `  ${s.bold(`${report.rejected.length} not read`)}`);
+    for (const said of report.rejected.slice(0, 5)) rows.push(`    ${s.dim(said)}`);
+    if (report.rejected.length > 5) rows.push(s.dim(`    and ${report.rejected.length - 5} more`));
+  }
+  if (report.imported > 0) {
+    rows.push(
+      '',
+      s.dim('Reported, not observed: blame names the tool and says so, and revert'),
+      s.dim('will not touch these lines — a trace carries no before-image.'),
+    );
+  }
+  return lines(...rows);
 }

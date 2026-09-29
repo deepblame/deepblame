@@ -66,6 +66,17 @@ npx deepblame report --base origin/main
 
 Only the lines the change touches are counted, so nothing that was reviewed weeks ago is counted again. `--markdown` gives the comment version; the repository has a drop-in GitHub Action that posts it on every pull request.
 
+## It speaks the standard
+
+[Agent Trace](https://agent-trace.dev) is the interchange format Cursor published with Anthropic, Cognition, Cloudflare, Vercel and Google behind it. DeepBlame writes it and reads it, so your attribution is not trapped in one tool.
+
+```sh
+npx deepblame trace export
+npx deepblame trace import ./traces
+```
+
+Imported attribution is kept apart from what we watched: marked **reported**, blamed with the reporting tool named, and never reverted — a trace carries no before-image, so there is nothing to put back.
+
 ## Which tools are covered
 
 | Tool | How | What you get |
@@ -90,6 +101,8 @@ Any other tool can report with one JSON object per call on stdin — no SDK, no 
 | `deepblame cost` | What the agents spent, by model and by agent |
 | `deepblame revert` | Undo one agent's work and nobody else's |
 | `deepblame report` | How much of a branch or pull request an agent wrote |
+| `deepblame trace export` | Write the ledger as Agent Trace records other tools read |
+| `deepblame trace import` | Take in attribution another tool recorded |
 | `deepblame push` | Send this machine's runs to the team's remote |
 | `deepblame pull` | Take in the team's runs and fold them into yours |
 | `deepblame doctor` | Check recording is working, and say what to fix |
@@ -110,6 +123,6 @@ Not recording? `deepblame doctor` says why, and what to do about it.
 
 There is also a VS Code extension over the same ledger — the agent and the prompt beside the line, and undo from the hover. It is in the repository, not on the Marketplace yet.
 
-**Status: pre-alpha, and already useful.** Recording, blame, cost, revert, team sharing and pull request reports all work today.
+**Status: pre-alpha, and already useful.** Recording, blame, cost, revert, team sharing, pull request reports and Agent Trace interop all work today.
 
 [Source and full documentation](https://github.com/deepblame/deepblame) · [deepblame.com](https://deepblame.com) · Apache-2.0

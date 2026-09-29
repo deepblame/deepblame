@@ -6,7 +6,12 @@ import * as z from 'zod';
  */
 export const SCHEMA_VERSION = 1;
 
-export const HARNESS_IDS = ['opencode', 'claude-code', 'codex', 'cursor', 'git'] as const;
+/**
+ * `external` is not a tool we hook: it is attribution another tool reported to
+ * us in the Agent Trace format. Kept apart from the rest on purpose, because
+ * we watched none of it and blame has to be able to say so.
+ */
+export const HARNESS_IDS = ['opencode', 'claude-code', 'codex', 'cursor', 'git', 'external'] as const;
 export type HarnessId = (typeof HARNESS_IDS)[number];
 
 const sha256 = z.string().regex(/^[0-9a-f]{64}$/, 'expected a lowercase sha256 hex digest');

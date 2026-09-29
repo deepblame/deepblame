@@ -87,6 +87,25 @@ export function planRevert(repo: Repo, selection: RevertSelection): RevertPlan {
   try {
     // Newest first, so a later change is undone before the one it sat on.
     for (const run of runs) {
+      // An imported Agent Trace says which lines an agent wrote and nothing
+      // about what stood there before, so there is nothing to put back. It
+      // also leaves `pre_blob_sha` null, which for a run we watched means the
+      // file was created — undoing that would delete a file nobody asked us
+      // to delete. Reported work is reported, never reverted.
+      if (run.harness.name === 'external') {
+        for (const written of run.files_written) {
+          const path = currentNameOf(renames, written.path);
+          if (files.has(path)) continue;
+          files.set(path, {
+            path,
+            recordedAs: path === written.path ? null : written.path,
+            status: 'unverifiable',
+            write: null,
+            changed: 0,
+          });
+        }
+        continue;
+      }
       for (const written of run.files_written) {
         // The ledger holds the name the file had then; put the change back
         // where the file lives now.

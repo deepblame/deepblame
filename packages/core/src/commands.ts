@@ -1,5 +1,6 @@
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { STATE_DIR, type HarnessId, type Run } from '@deepblame/protocol';
+import { STATE_DIR, parseTrace, type HarnessId, type Run, type TraceRecord } from '@deepblame/protocol';
 import { FileNotTrackedError, blameFile, type BlameResult, type BlameSpan } from './blame';
 import { detectHarnesses, type HarnessDetection } from './detect';
 import { diagnose, type DoctorReport } from './doctor';
@@ -37,6 +38,7 @@ import { findRun, indexedRuns, listRuns, type LedgerRun } from './runs';
 import { appendRuns, seal, type SealResult } from './seal';
 import { pullLedger, pushLedger, type ShareResult } from './share';
 import { ensureStateDir, readStateDir, type StateDirInfo } from './state';
+import { TRACE_DIR, recordFromRun, runFromRecord } from './agenttrace';
 import { vendorCapture, type CaptureBundle } from './vendor';
 import { markWorktree, recordWorktreeTurn } from './worktree';
 
@@ -588,4 +590,147 @@ export function recordCommit(cwd: string, options: CommandOptions & { ref?: stri
   if (run === null) return { repo, run: null, recorded: false, head: readLedger(repo).head };
   const result = appendRuns(repo, [run], now);
   return { repo, run, recorded: result.sealed > 0, head: result.head };
+}
+
+export interface TraceExportReport {
+  repo: Repo;
+  initialized: boolean;
+  /** The records themselves, for `--json` and for tests. */
+  records: TraceRecord[];
+  /** Files written, when writing to disk. */
+  written: string[];
+  dir: string | null;
+  /** Runs that wrote nothing we could express as ranges. */
+  skipped: number;
+}
+
+/**
+ * Our ledger in the format the rest of the industry reads.
+ *
+ * One record per run, because a record has one tool, one moment and one
+ * revision, and so does a run. Ranges are given at the revision the run ended
+ * on, which is what the spec means by positions being relative to `vcs`.
+ */
+export function traceExport(
+  cwd: string,
+  options: CommandOptions & { out?: string | null; write?: boolean; limit?: number; seal?: boolean } = {},
+): TraceExportReport {
+  const repo = openRepo(cwd);
+  const initialized = readLedger(repo).head !== null && readStateDir(repo.root).exists;
+  if (!initialized) return { repo, initialized, records: [], written: [], dir: null, skipped: 0 };
+  if (options.seal !== false) seal(repo, { now: options.now });
+
+  const records: TraceRecord[] = [];
+  let skipped = 0;
+  for (const entry of listRuns(repo, { limit: options.limit ?? Number.MAX_SAFE_INTEGER })) {
+    if (entry.run.harness.name === 'external') continue;
+    const record = recordFromRun(repo, entry.run);
+    if (record === null) skipped += 1;
+    else records.push(record);
+  }
+
+  if (options.write !== true) return { repo, initialized, records, written: [], dir: null, skipped };
+
+  const dir = options.out ?? join(repo.root, STATE_DIR, TRACE_DIR);
+  mkdirSync(dir, { recursive: true });
+  const written: string[] = [];
+  for (const record of records) {
+    const file = join(dir, `${record.id}.json`);
+    writeFileSync(file, `${JSON.stringify(record, null, 2)}\n`);
+    written.push(file);
+  }
+  return { repo, initialized, records, written, dir, skipped };
+}
+
+export interface TraceImportReport {
+  repo: Repo;
+  initialized: boolean;
+  /** Records found and understood. */
+  read: number;
+  /** Runs added to the ledger. Records already imported are not counted again. */
+  imported: number;
+  /** Files or records we could not read, with the reason. */
+  rejected: string[];
+  /** Ranges whose revision this repository does not have, so they cannot be followed. */
+  unresolved: number;
+  /** The tools named by what came in. */
+  tools: string[];
+}
+
+/**
+ * Attribution from another tool, folded in as reported rather than observed.
+ *
+ * It lands in the ledger like anything else, so it travels with `push` and
+ * `pull` and `blame` can answer for it — at a lower confidence, saying who
+ * reported it. It is never revertible: a trace carries no before-image.
+ */
+export function traceImport(
+  cwd: string,
+  paths: readonly string[],
+  options: CommandOptions = {},
+): TraceImportReport {
+  const repo = openRepo(cwd);
+  const initialized = readLedger(repo).head !== null && readStateDir(repo.root).exists;
+  const empty: TraceImportReport = { repo, initialized, read: 0, imported: 0, rejected: [], unresolved: 0, tools: [] };
+  if (!initialized) return empty;
+
+  const now = options.now ?? new Date();
+  const rejected: string[] = [];
+  const runs: Run[] = [];
+  const tools = new Set<string>();
+  let read = 0;
+  let unresolved = 0;
+
+  for (const file of expand(paths, rejected)) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(readFileSync(file, 'utf8'));
+    } catch {
+      rejected.push(`${file}: not JSON`);
+      continue;
+    }
+    // A file may hold one record or a list of them; both are common in the wild.
+    for (const candidate of Array.isArray(parsed) ? parsed : [parsed]) {
+      const result = parseTrace(candidate);
+      if ('error' in result) {
+        rejected.push(`${file}: ${result.error}`);
+        continue;
+      }
+      read += 1;
+      const built = runFromRecord(repo, result.record, now);
+      if (built === null) {
+        rejected.push(`${file}: no attributed ranges`);
+        continue;
+      }
+      unresolved += built.unresolved;
+      if (built.run === null) {
+        rejected.push(`${file}: nothing in it matches a state of this repository`);
+        continue;
+      }
+      runs.push(built.run);
+      tools.add(built.tool);
+    }
+  }
+
+  const sealed = runs.length === 0 ? { sealed: 0 } : appendRuns(repo, runs, now);
+  return { repo, initialized, read, imported: sealed.sealed, rejected, unresolved, tools: [...tools].sort() };
+}
+
+/** Directories stand for the .json files inside them, one level down. */
+function expand(paths: readonly string[], rejected: string[]): string[] {
+  const files: string[] = [];
+  for (const given of paths) {
+    if (!existsSync(given)) {
+      rejected.push(`${given}: no such file`);
+      continue;
+    }
+    if (!statSync(given).isDirectory()) {
+      files.push(given);
+      continue;
+    }
+    for (const name of readdirSync(given).sort()) {
+      if (name.endsWith('.json')) files.push(join(given, name));
+    }
+  }
+  return files;
 }

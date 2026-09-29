@@ -156,6 +156,19 @@ revert     the retry loop is gone, your rename is still there
 
 A plain three-way merge cannot do that — two changes on adjacent lines conflict. DeepBlame has something git does not: a record of which lines belong to the agent.
 
+## It speaks the standard
+
+Attribution only helps if the next tool along can read it. [Agent Trace](https://agent-trace.dev) is the RFC Cursor published in January 2026, with Anthropic, Cognition, Cloudflare, Vercel and Google behind it — three of the four agents recorded here are on that list. DeepBlame writes it and reads it.
+
+```sh
+npx deepblame trace export          # our ledger, as records anyone can read
+npx deepblame trace import ./traces # somebody else's records, as answers we can give
+```
+
+What comes in is kept honestly apart from what we watched. A trace says which lines an agent wrote; it carries no before-image, so an imported line is marked **reported**, blamed at 80% with the tool named, and never reverted — there is nothing to put back.
+
+A claim is only taken in if git can still show the state it was made against: either the revision it names is one this repository has, or the range's `content_hash` matches the lines in the file today. That second path is how a trace from a colleague's clone lands correctly with no shared history. Anything else is counted, reported, and left out rather than guessed at.
+
 ## One ledger for the team
 
 Until you share it, the record of who wrote what lives on the machine that watched it happen, which answers the question for you and nobody else. The ledger is a git ref, so sharing it is the thing git is already good at:
@@ -289,6 +302,8 @@ One thing it has to say out loud: releasing a blob for real means the ledger's c
 | `deepblame cost` | What the agents spent, by model and by agent |
 | `deepblame revert` | Undo one agent's work and nobody else's |
 | `deepblame report` | How much of a branch or pull request an agent wrote |
+| `deepblame trace export` | Write the ledger as Agent Trace records other tools read |
+| `deepblame trace import` | Take in attribution another tool recorded |
 | `deepblame push` | Send this machine's runs to the team's remote |
 | `deepblame pull` | Take in the team's runs and fold them into yours |
 | `deepblame doctor` | Check that recording is actually working, and say what to fix |
@@ -296,7 +311,7 @@ One thing it has to say out loud: releasing a blob for real means the ledger's c
 | `deepblame seal` | Fold captured events into the ledger now |
 | `deepblame hooks <action>` | `install`, `uninstall` or `status` for capture hooks |
 
-Options: `-C <dir>` runs as if started in another directory, `--limit <n>` bounds `log`, `--days <n>` bounds `cost`, `--why <line>` explains one line in `blame`, `--run <id>` / `--agent <name>` / `--hours <n>` choose what `revert` undoes, `--apply` makes `revert` write, `--base <ref>` / `--head <ref>` set what `report` compares and `--markdown` formats it for a comment, `--remote <name>` picks where `push` and `pull` go, `--json` prints machine-readable output, `--no-seal` lists only what is already in the ledger.
+Options: `--out <dir>` is where `trace export` writes, `-C <dir>` runs as if started in another directory, `--limit <n>` bounds `log`, `--days <n>` bounds `cost`, `--why <line>` explains one line in `blame`, `--run <id>` / `--agent <name>` / `--hours <n>` choose what `revert` undoes, `--apply` makes `revert` write, `--base <ref>` / `--head <ref>` set what `report` compares and `--markdown` formats it for a comment, `--remote <name>` picks where `push` and `pull` go, `--json` prints machine-readable output, `--no-seal` lists only what is already in the ledger.
 
 ## Roadmap
 
@@ -307,7 +322,8 @@ Options: `-C <dir>` runs as if started in another directory, `--limit <n>` bound
 5. **Housekeeping** — `doctor` accounts for the tool's own silence, `gc` keeps the ledger from growing forever. *Done.*
 6. **A team ledger** — `push` and `pull` join two ledgers without a possible conflict, file contents included, so blame and revert work on a colleague's runs. `report` says how much of a branch an agent wrote, and a drop-in Action comments it on every pull request. *Done.*
 7. **In the editor** — a VS Code extension over the same ledger, in `packages/vscode`. *Done, though how it looks has only been judged by the people who have installed it.*
-8. **Next**: real users. The biggest gap is no longer a feature — it is that nobody outside this repository has run it yet. After that, signed audit reports and a hosted panel for teams that want the record off their laptops.
+8. **Agent Trace** — writing and reading the interchange format the agent vendors agreed on, so this is not one more island. *Done.*
+9. **Next**: real users. The biggest gap is no longer a feature — it is that nobody outside this repository has run it yet. After that, signed audit reports and a hosted panel for teams that want the record off their laptops.
 
 ## Development
 

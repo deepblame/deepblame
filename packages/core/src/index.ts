@@ -117,6 +117,8 @@ export {
   share,
   show,
   status,
+  traceExport,
+  traceImport,
   type BlameOptions,
   type BlameReport,
   type CommandOptions,
@@ -141,4 +143,20 @@ export {
   type ShowOptions,
   type ShowReport,
   type StatusReport,
+  type TraceExportReport,
+  type TraceImportReport,
 } from './commands';
+export {
+  TRACE_DIR,
+  recordFromRun,
+  runFromRecord,
+  traceId,
+  type ImportedRun,
+} from './agenttrace';
+export {
+  TRACE_VENDOR,
+  TRACE_VERSION,
+  parseTrace,
+  type TraceContributor,
+  type TraceRecord,
+} from '@deepblame/protocol';
