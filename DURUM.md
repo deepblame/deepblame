@@ -484,6 +484,20 @@ Gerçekten denendi: hiç ortak geçmişi olmayan ikinci bir depoya Cursor format
 
 **Testler:** 255. 24'ü Agent Trace için, ve bunların biri yayınlanmış şemanın **elle yazılmış katı bir kopyası** — `additionalProperties: false` dahil. Yani uydurduğumuz bir alan, başkasının ayrıştırıcısında değil bizim testimizde patlıyor.
 
+### 29 Eylül — lisans ve "kodu çalarlar mı"
+
+Soru soruldu, dürüst cevap: **Apache-2.0 kopyalamaya açıkça izin veriyor.** Herkes alabilir, değiştirebilir, kapalı bir ürünün içine koyup satabilir. Bunu lisansı seçerken seçmişiz. Rakiplerin hepsi de aynı yerde (git-ai Apache-2.0, agentdiff MIT/Apache, brain0 Apache-2.0, whogitit MIT) — bu kategoride kapalı kaynak, kimsenin kurmaması demek.
+
+**Kod zaten hendek değildi.** Şubat–Temmuz arası en az sekiz kişi aynı fikri bağımsız kurdu; kimse kimseyi kopyalamadı. git-ai'ın kodu da Apache-2.0'dı ve OpenAI yine aldı — kod için değil, ekip ve konum için. Bizim ayırt edici parçamız `revert.ts`, 483 satır; yetkin biri README'yi okuyup bir haftada yazar.
+
+Koruyan şeyler: insanların kuracağı şey olmak, hız, isim + alan adı, ve **ücretli kısmı hiç yayınlamamak** (barındırılan panel, SSO, imzalı rapor depoya girmeyecek — brain0'ın yaptığı gibi).
+
+**Bakarken bulunan iki boşluk, kapatıldı:**
+- `LICENSE` dosyasında Apache şablonunun `Copyright {yyyy} {name of copyright owner}` satırı **doldurulmamıştı.** Artık `Copyright 2026 the DeepBlame authors`. (Şirket kurulunca ya da isim tercih edilirse değişir.)
+- **`NOTICE` dosyası yoktu.** Apache-2.0 bölüm 4(d) gereği kodu yeniden dağıtan herkesin taşımak zorunda olduğu dosya bu — tek gerçek yaptırımımız ve bedava tanıtım. Eklendi, hem npm paketine hem eklentiye kopyalanıyor. İçinde ayrıca marka bildirimi var: Claude Code, Cursor, Codex, OpenCode ve Agent Trace sahiplerinin, onay iması yok.
+
+**Açık kalan, hukukçu sorusu:** kodun büyük kısmını bir yapay zekâ yazdı ve commit'lerde bu açıkça yazıyor. Yapay zekâ üretimi kodun telif durumu birçok ülkede net değil (ABD Telif Ofisi insan katkısı olmayan üretimin telife konu olmadığı görüşünde). Bugün pratik sorun değil, ama yatırım/satış aşamasında alıcının avukatı soracak. O gün gelmeden danışılmalı.
+
 ## 17. Açık sorular
 
 - **Claude Code hook şeması kendi bilgimizden yazıldı** (dokümantasyona erişilemedi: alan adı izin istedi, kullanıcı reddetti). Alan adları (`hook_event_name`, `tool_name`, `tool_input.file_path`, `old_string`/`new_string`, `session_id`) doğru biliniyor ama **gerçek bir Claude Code oturumunda henüz doğrulanmadı.** İlk dogfood turunda kontrol edilecek; yanlış alan varsa `capture.ts` içinde tek yerde düzelir.

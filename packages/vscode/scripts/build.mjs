@@ -27,3 +27,4 @@ await build({
 });
 
 copyFileSync(at('../../../LICENSE'), at('../LICENSE'));
+copyFileSync(at('../../../NOTICE'), at('../NOTICE'));

@@ -34,4 +34,7 @@ for (const [entry, output, format] of entries) {
   chmodSync(at(output), 0o755);
 }
 
+// Both travel with the package: the licence because it is the licence, and
+// NOTICE because Apache-2.0 section 4(d) makes every redistributor carry it.
 copyFileSync(at('../../../LICENSE'), at('../LICENSE'));
+copyFileSync(at('../../../NOTICE'), at('../NOTICE'));
