@@ -1,6 +1,6 @@
 {
   "name": "deepblame",
-  "version": "0.4.3",
+  "version": "0.4.4",
   "description": "Know which AI agent wrote each line of your code, why, and what it cost \u2014 then undo just that agent's work. Works with Claude Code, Cursor, Codex and OpenCode, and speaks Agent Trace.",
   "license": "Apache-2.0",
   "homepage": "https://deepblame.com",

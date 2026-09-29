@@ -1,5 +1,5 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { BIN_DIR, CAPTURE_STAMP, STATE_DIR } from '@deepblame/protocol';
 import { describe, expect, it } from 'vitest';
 import { init } from '../src/commands';
@@ -238,6 +238,37 @@ describe('doctor on a hook that no longer resolves', () => {
 
     rmSync(script);
     expect(check()?.status).toBe('fail');
+  });
+
+  it('catches a relative path, which passes by luck from the repository root', () => {
+    // Found by looking at our own repository: a hook written on the first day
+    // said `node packages/cli/dist/capture.cjs`. It had recorded nothing in
+    // eight days, and doctor called it healthy — because doctor runs from the
+    // top of the repository, where that path happens to resolve.
+    const root = repoWithHook('node packages/cli/dist/capture.cjs');
+    init(root, { now: NOW, noHooks: true });
+    mkdirSync(join(root, 'packages', 'cli', 'dist'), { recursive: true });
+    writeFileSync(join(root, 'packages', 'cli', 'dist', 'capture.cjs'), 'capture\n');
+
+    // node has to be findable, or the check stops at the interpreter and never
+    // reaches the argument this test is about.
+    const check = diagnose(openRepo(root), { now: NOW, hooks, env: { PATH: dirname(process.execPath) } }).checks.find(
+      (one) => one.name === 'hook',
+    );
+    // The file is right there, and it is still wrong.
+    expect(check?.status).toBe('fail');
+    expect(check?.detail).toContain('relative path');
+    expect(check?.detail).toContain('repository root');
+  });
+
+  it('says which command is missing, not just that something is', () => {
+    const root = repoWithHook('/nowhere/at/all/capture.cjs');
+    init(root, { now: NOW, noHooks: true });
+    const check = diagnose(openRepo(root), { now: NOW, hooks, env: { PATH: '' } }).checks.find(
+      (one) => one.name === 'hook',
+    );
+    expect(check?.detail).toContain('/nowhere/at/all/capture.cjs');
+    expect(check?.detail).toContain('nothing is being recorded');
   });
 
   it('takes an npx command on trust rather than going to the network', () => {

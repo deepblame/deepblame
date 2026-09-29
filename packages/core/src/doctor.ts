@@ -1,5 +1,5 @@
 import { existsSync, statSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { basename, isAbsolute, join } from 'node:path';
 import { QUEUE_FILE, SEAL_LOCK_FILE, STATE_DIR } from '@deepblame/protocol';
 import { commandOnPath, detectHarnesses, type HarnessDetection } from './detect';
 import { tryGit } from './git';
@@ -116,14 +116,14 @@ export function diagnose(repo: Repo, options: DoctorOptions): DoctorReport {
   // worst of which looks completely healthy: `npx deepblame init` puts the CLI
   // on PATH for the length of that one command, so a hook naming it is correct
   // while init verifies it and dead by the time an agent fires it.
-  const broken = installedCommands(repo.root).filter((hook) => !resolves(hook.command, options.env));
+  const broken = installedCommands(repo.root)
+    .map((hook) => ({ hook, wrong: resolves(hook.command, options.env) }))
+    .filter((one): one is { hook: (typeof one)['hook']; wrong: string } => one.wrong !== null);
   if (broken.length > 0) {
     checks.push({
       name: 'hook',
       status: 'fail',
-      detail: `${broken.length === 1 ? 'a hook calls' : 'hooks call'} ${broken
-        .map((hook) => `'${firstWord(hook.command)}'`)
-        .join(', ')}, which is not there — nothing is being recorded`,
+      detail: broken.map((one) => one.wrong).join('; '),
       fix: 'deepblame init',
     });
   }
@@ -239,19 +239,42 @@ function missingContent(repo: Repo, entries: readonly IndexedRun[]): number {
  * a bare name has to be on PATH. `npx …` is taken on trust, since deciding it
  * would mean going to the network.
  */
-function resolves(command: string, env: NodeJS.ProcessEnv | undefined): boolean {
+function resolves(command: string, env: NodeJS.ProcessEnv | undefined): string | null {
   const [program, ...rest] = words(command);
-  if (program === undefined || program === '') return false;
+  if (program === undefined || program === '') return 'a hook has no command in it';
   // Taken on trust: deciding it would mean going to the network.
-  if (/^npx(\.[a-z]+)?$/i.test(basename(program))) return true;
+  if (/^npx(\.[a-z]+)?$/i.test(basename(program))) return null;
 
-  const there = /[\\/]/.test(program) ? existsSync(program) : commandOnPath(program, env);
-  if (!there) return false;
+  const named = /[\\/]/.test(program);
+  if (named && !isAbsolute(program)) return relative(program);
+  if (named ? !existsSync(program) : !commandOnPath(program, env)) {
+    return `a hook calls '${program}', which is not there — nothing is being recorded`;
+  }
+
   // `node /path/to/capture.cjs` — whatever it is handed has to be there too.
   // The program itself is the interpreter and exists on every machine, so
   // checking only it would pass a hook whose script has been deleted.
   const script = rest.find((word) => /\.[cm]?js$/.test(word));
-  return script === undefined || existsSync(script);
+  if (script === undefined) return null;
+  if (!isAbsolute(script)) return relative(script);
+  return existsSync(script)
+    ? null
+    : `a hook calls '${script}', which is not there — nothing is being recorded`;
+}
+
+/**
+ * A relative path in a hook is the quiet kind of wrong.
+ *
+ * Nothing decides what directory an agent fires its hooks from, so a path like
+ * `packages/cli/dist/capture.cjs` records perfectly whenever the agent happens
+ * to start at the top of the repository and silently records nothing when it
+ * does not. Worse, checking it from the repository root — which is where
+ * anyone runs `doctor` — finds the file and reports it healthy. It is only a
+ * problem where nobody is looking, so it is called out on sight rather than
+ * tested for existence.
+ */
+function relative(path: string): string {
+  return `a hook calls '${path}', a relative path — it only records when the agent happens to run from the repository root`;
 }
 
 /**

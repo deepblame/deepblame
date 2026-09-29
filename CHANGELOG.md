@@ -4,6 +4,16 @@ What changed, in the words of someone deciding whether to upgrade. The release
 notes on GitHub are taken from this file, so this is the one place it is
 written down.
 
+## 0.4.4
+
+- `doctor` now calls out a hook that points at a relative path. Nothing decides
+  what directory an agent fires its hooks from, so such a hook records whenever
+  the agent starts at the top of the repository and silently records nothing
+  when it does not — and checking it from the repository root, which is where
+  anyone runs `doctor`, finds the file and calls it healthy. Found in our own
+  repository, where a hook written on the first day had recorded nothing in
+  eight days while `doctor` reported everything fine.
+
 ## 0.4.3
 
 - Every release now appears on GitHub with notes and, attached to it, the VS
