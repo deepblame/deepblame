@@ -58,9 +58,9 @@ badly. Nothing is written until you confirm.
 
 Until this is on the Marketplace:
 
-1. Download `deepblame-vscode-0.4.2.vsix`.
+1. Download `deepblame-vscode-0.4.3.vsix`.
 2. In VS Code: `Extensions` → `...` → `Install from VSIX...`, or
-   `code --install-extension deepblame-vscode-0.4.2.vsix`.
+   `code --install-extension deepblame-vscode-0.4.3.vsix`.
 3. Reload.
 
 ## A note on what has been tested
