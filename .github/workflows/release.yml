@@ -12,7 +12,8 @@ on:
         options: [latest, next]
 
 permissions:
-  contents: read
+  # Creating the release and its tag. Everything else stays read-only.
+  contents: write
   # Trusted publishing: npm trades this token for a short-lived credential, so
   # there is no long-lived secret to leak, and it records where the package was
   # built from.
@@ -41,5 +42,45 @@ jobs:
       - run: npm install --global npm@latest
       - run: npm --version
       - run: pnpm --filter deepblame pack --pack-destination "$RUNNER_TEMP"
+      # Skipped when this version is already out, so a release that failed
+      # after publishing can be run again to finish the rest.
       - name: Publish
-        run: npm publish "$RUNNER_TEMP"/deepblame-*.tgz --access public --tag "${{ inputs.tag }}"
+        run: |
+          VERSION=$(node -p "require('./packages/cli/package.json').version")
+          if npm view "deepblame@$VERSION" version >/dev/null 2>&1; then
+            echo "deepblame@$VERSION is already on npm; skipping the publish."
+            exit 0
+          fi
+          npm publish "$RUNNER_TEMP"/deepblame-*.tgz --access public --tag "${{ inputs.tag }}"
+
+      # Everything below is the GitHub release: the tag, the notes, and the
+      # one file people actually download.
+      - name: Work out the version
+        id: version
+        run: echo "value=$(node -p "require('./packages/cli/package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: Build the VS Code extension
+        run: |
+          pnpm --filter deepblame-vscode build
+          npx --yes @vscode/vsce package --no-dependencies \
+            --out "$RUNNER_TEMP/deepblame-vscode-${{ steps.version.outputs.value }}.vsix"
+        working-directory: packages/vscode
+
+      # Notes come from CHANGELOG.md, not from the commit log: this repository
+      # is updated by uploading files, so nearly every commit is called "Add
+      # files via upload" and generated notes would say nothing.
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          if gh release view "v$VERSION" >/dev/null 2>&1; then
+            echo "v$VERSION is already released; leaving it alone."
+            exit 0
+          fi
+          node scripts/release-notes.mjs "$VERSION" > "$RUNNER_TEMP/notes.md"
+          gh release create "v$VERSION" \
+            --title "v$VERSION" \
+            --notes-file "$RUNNER_TEMP/notes.md" \
+            "$RUNNER_TEMP"/deepblame-vscode-*.vsix \
+            "$RUNNER_TEMP"/deepblame-*.tgz
