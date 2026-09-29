@@ -1,9 +1,9 @@
 {
   "name": "deepblame",
-  "version": "0.4.1",
-  "description": "Know which AI agent wrote every line of your code, why it wrote it, and undo just that agent's work.",
+  "version": "0.4.2",
+  "description": "Know which AI agent wrote each line of your code, why, and what it cost \u2014 then undo just that agent's work. Works with Claude Code, Cursor, Codex and OpenCode, and speaks Agent Trace.",
   "license": "Apache-2.0",
-  "homepage": "https://github.com/deepblame/deepblame#readme",
+  "homepage": "https://deepblame.com",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/deepblame/deepblame.git",
@@ -33,12 +33,15 @@
     "git",
     "blame",
     "provenance",
+    "attribution",
+    "agent-trace",
+    "revert",
     "ai-agents",
     "coding-agents",
     "claude-code",
-    "opencode",
+    "cursor",
     "codex",
-    "cursor"
+    "opencode"
   ],
   "scripts": {
     "build": "node scripts/build.mjs"

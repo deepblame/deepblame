@@ -1,6 +1,6 @@
 # DeepBlame
 
-**The system of record for AI-written code.** Which agent wrote this line. Why. What it cost. And how to take one agent's work back out without losing anyone else's.
+**Know which AI agent wrote each line — and undo just theirs.** Three agents and two people work in one repository. `git blame` can only name whoever committed. DeepBlame names the agent, what it was asked for, and what it cost, then takes one agent's work back out without losing anyone else's.
 
 ```sh
 npx deepblame init
