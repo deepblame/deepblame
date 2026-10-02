@@ -4,6 +4,55 @@ What changed, in the words of someone deciding whether to upgrade. The release
 notes on GitHub are taken from this file, so this is the one place it is
 written down.
 
+## 0.5.0
+
+**Blame was claiming lines no agent had touched, and the ledger was losing
+about one turn in two hundred.** Both came out of three hundred turns fired at
+the published package on purpose. This is the release to be on.
+
+- **An agent that rewrites a file is credited with what it changed, not with
+  the file.** A whole-file write — `Write`, and every editor that applies a
+  model's answer as a new version of the file — reports no line ranges, and the
+  ledger used to fill that in with "all of it". Change one line of ten and it
+  said the agent wrote ten; change nothing and it still said ten. The before
+  and after were both stored the whole time, so the real answer was always
+  there: it is now read off them, the way `revert` always did. Blame on an
+  existing ledger will claim fewer lines than it did yesterday, and every one
+  of them provable.
+- **A turn can no longer be lost.** The sealer read the queue, wrote to the
+  ledger, then wrote back what it had not used — and an event an agent appended
+  in between was overwritten. A turn that lost its stop event never closed, so
+  it sat in the queue for good while `log` and `status` showed nothing. The
+  queue now changes hands by being renamed, so the sealer never writes to the
+  file the agents append to.
+- **A turn whose agent was killed is sealed anyway**, once its session has been
+  silent for half an hour. Before, Ctrl-C meant that turn's work was recorded
+  nowhere.
+- **Credentials stay out of the ledger.** The ledger is a git ref, and
+  `deepblame push` sends it to the team's remote. Keys pasted into prompts are
+  redacted — the vendor-issued shapes, JSON web tokens, private key headers,
+  `TOKEN=…`, URLs carrying a password — before the line is cut to length, so
+  half a key cannot survive the truncation. The contents of files the
+  repository ignores are no longer stored, nor of files that are credentials by
+  name (`.env`, `*.pem`, `id_rsa`, `.npmrc` and the like); the run still
+  records that an agent wrote them. `deepblame gc --days 0` now releases every
+  stored file content, for when something got in that should not have.
+- **Agent Trace import actually lands now.** A claim was anchored to any
+  revision this repository happened to have, without checking the claimed lines
+  were in it — and our own export names the revision a run *started* from, so
+  every round trip anchored to the file before the agent touched it, showed
+  nothing in blame, and said "took in 1 record" on the way past. The hashes in
+  the record now decide, and the file is looked for as committed and as it
+  stands in the worktree, which is where an agent's work is for the first while.
+- `doctor` fails on a ledger ref that points at ordinary history. It used to
+  call that "created, nothing recorded yet".
+- `report --base <ref>` refuses a ref this repository does not have. It used to
+  answer "no lines changed", which in a pull request comment reads as "no agent
+  wrote any of this" — and the base in CI is a variable somebody else fills in.
+- The undo plan counted conflict markers when it said how big a conflicted file
+  was: one line of an agent's work was announced as seven, on the screen where
+  somebody decides whether to trust the undo.
+
 ## 0.4.4
 
 - `doctor` now calls out a hook that points at a relative path. Nothing decides

@@ -15,6 +15,19 @@ import type { Repo } from './repo';
  * about the change in front of you.
  */
 
+/**
+ * A ref the report was asked to compare against, which this repository does
+ * not have. Its own class because the CLI has to say so plainly: this runs in
+ * CI, where the base is a variable somebody else fills in, and a shrug reads
+ * as "no agent wrote any of this".
+ */
+export class NoSuchRefError extends Error {
+  override name = 'NoSuchRefError';
+  constructor(readonly ref: string) {
+    super(`no such commit in this repository: ${ref}`);
+  }
+}
+
 export interface AgentShare {
   agent: string;
   lines: number;
@@ -49,6 +62,16 @@ const MAX_RUNS = 5;
 export function reportRange(repo: Repo, base: string, head = 'HEAD'): ReportResult {
   const cwd = repo.root;
   const empty: ReportResult = { base, head, files: [], agents: [], changed: 0, byAgents: 0, skipped: 0 };
+  // A ref that does not resolve used to come out as "no lines changed", which
+  // in a pull request comment reads as "no agent wrote any of this". This runs
+  // in CI, where the base is a variable somebody else fills in, so the one
+  // thing it must not do is answer confidently about a comparison it never
+  // made.
+  for (const ref of [base, head]) {
+    if (tryGit(['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], { cwd }) === null) {
+      throw new NoSuchRefError(ref);
+    }
+  }
   // Two dots, not three: what this branch changed relative to where it forked.
   const merge = tryGit(['merge-base', base, head], { cwd }) ?? base;
   const names = tryGit(['diff', '--name-only', '--diff-filter=ACMR', `${merge}..${head}`], { cwd });

@@ -135,8 +135,16 @@ export function runFromRecord(repo: Repo, record: TraceRecord, now = new Date())
   for (const file of record.files) {
     const ranges: Ranges = file.conversations.flatMap((one) => one.ranges);
     if (ranges.length === 0) continue;
+    // A revision we happen to hold is only the state the claim was made
+    // against if the claimed lines are in it. Taking it on trust anchored
+    // every claim to the wrong state of the file: our own exporter writes the
+    // revision the run started from, which is the file *before* the agent
+    // changed it, so a trace exported from one clone and imported into another
+    // resolved against the pre-image, matched nothing in blame, and said
+    // "took in 1 record" on the way past. The hashes are what locate a line;
+    // the revision only narrows down where to look.
     const atRevision = revision === null ? null : tryGit(['rev-parse', `${revision}:${file.path}`], { cwd: repo.root });
-    const blob = atRevision ?? matchByHash(repo, file.path, ranges);
+    const blob = anchor(repo, file.path, atRevision, ranges);
     if (blob === null) {
       unresolved += ranges.length;
       continue;
@@ -197,22 +205,67 @@ export function runFromRecord(repo: Repo, record: TraceRecord, now = new Date())
  * follow from. Every hashed range has to match: one that does not means the
  * record describes a different file than the one in front of us.
  */
-function matchByHash(repo: Repo, path: string, ranges: Ranges): string | null {
+/**
+ * The state of the file the claim is about, out of the states we can see.
+ *
+ * Three places it can be, strongest first:
+ *
+ *  1. The revision the record names, if we have it. A revision is only the
+ *     state a claim was made against if the claimed lines are in it, so the
+ *     hashes decide; it used to be taken on trust, and that was wrong in the
+ *     ordinary case. Our own exporter writes the revision the run started
+ *     from — the file *before* the agent changed it — so every round trip
+ *     anchored to the pre-image, matched nothing in blame, and said "took in
+ *     1 record" on its way past.
+ *  2. The file as committed. This is the case of a trace arriving from another
+ *     clone, which is what `content_hash` is in the standard for.
+ *  3. The file as it sits in the worktree. An agent's work is uncommitted for
+ *     a while, and a trace exported in that window describes exactly that.
+ *
+ * A record with no hashes anywhere can only be placed by its revision, and
+ * only as far as the file having been long enough to hold the lines claimed.
+ * Nothing else is checkable, and a line that cannot be checked is dropped:
+ * guessing is the one thing this tool must not do.
+ */
+function anchor(repo: Repo, path: string, atRevision: string | null, ranges: Ranges): string | null {
   const hashed = ranges.filter((one) => typeof one.content_hash === 'string');
-  if (hashed.length === 0) return null;
-  const blob = tryGit(['rev-parse', `HEAD:${path}`], { cwd: repo.root });
-  if (blob === null) return null;
-  const text = tryGit(['cat-file', 'blob', blob], { cwd: repo.root, raw: true });
-  if (text === null) return null;
-  const lines = splitLines(text);
+  if (hashed.length === 0) return atRevision === null ? null : longEnough(repo, atRevision, ranges);
+  const seen = new Set<string>();
+  for (const blob of [atRevision, committed(repo, path), working(repo, path)]) {
+    if (blob === null || seen.has(blob)) continue;
+    seen.add(blob);
+    if (holds(repo, blob, hashed)) return blob;
+  }
+  return null;
+}
 
+function committed(repo: Repo, path: string): string | null {
+  return tryGit(['rev-parse', `HEAD:${path}`], { cwd: repo.root });
+}
+
+/** Written into the object store, because blame has to be able to read it later. */
+function working(repo: Repo, path: string): string | null {
+  return tryGit(['hash-object', '-w', '--', path], { cwd: repo.root });
+}
+
+/** Every hashed range has to cover the text it says it covers. */
+function holds(repo: Repo, blob: string, hashed: Ranges): boolean {
+  const text = tryGit(['cat-file', 'blob', blob], { cwd: repo.root, raw: true });
+  if (text === null) return false;
+  const lines = splitLines(text);
   for (const one of hashed) {
     const slice = lines.slice(one.start_line - 1, one.end_line);
-    if (slice.length === 0) return null;
+    if (slice.length === 0) return false;
     const digest = `sha256:${createHash('sha256').update(slice.join('\n')).digest('hex')}`;
-    if (digest !== one.content_hash) return null;
+    if (digest !== one.content_hash) return false;
   }
-  return blob;
+  return true;
+}
+
+function longEnough(repo: Repo, blob: string, ranges: Ranges): string | null {
+  const text = tryGit(['cat-file', 'blob', blob], { cwd: repo.root, raw: true });
+  if (text === null) return null;
+  return Math.max(...ranges.map((one) => one.end_line)) <= splitLines(text).length ? blob : null;
 }
 
 function modelOf(record: TraceRecord): Run['model'] {

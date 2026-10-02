@@ -597,9 +597,52 @@ function toolSucceeded(response: unknown): boolean {
 }
 
 function intentOf(prompt: string): string | null {
-  const line = prompt.trim().split('\n')[0]?.trim() ?? '';
+  const line = redact(prompt.trim().split('\n')[0]?.trim() ?? '');
   if (line === '') return null;
   return line.length > INTENT_MAX ? `${line.slice(0, INTENT_MAX - 1)}…` : line;
+}
+
+/**
+ * Things that must not go into the ledger.
+ *
+ * The first line of the prompt is kept so blame can say what a run was asked
+ * for, and the full prompt text is not kept at all unless somebody turns it
+ * on. But people paste keys into prompts — "use sk-live-… to call the API" —
+ * and the ledger is committed to a git ref that `deepblame push` sends to the
+ * team remote. A key that reaches there has to be rotated, and nobody would
+ * have been told.
+ *
+ * Only shapes that are unmistakably credentials, and redacted before the line
+ * is cut to length so half a key cannot survive the truncation. Anything
+ * cleverer would start eating ordinary words, and this runs on the hot path.
+ */
+const SECRETS: RegExp[] = [
+  // Vendor-issued keys and tokens, which all announce themselves.
+  /\b(?:sk|pk|rk)-(?:live|test|proj|ant|or)?-?[A-Za-z0-9_-]{16,}/g,
+  /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}/g,
+  /\bgithub_pat_[A-Za-z0-9_]{20,}/g,
+  /\bxox[abprs]-[A-Za-z0-9-]{10,}/g,
+  /\bAKIA[0-9A-Z]{16}\b/g,
+  /\bAIza[A-Za-z0-9_-]{35}\b/g,
+  /\bhf_[A-Za-z0-9]{20,}/g,
+  /\bnpm_[A-Za-z0-9]{36}\b/g,
+  /\bglpat-[A-Za-z0-9_-]{20,}/g,
+  // A JSON web token, and the first line of a private key.
+  /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g,
+  /-----BEGIN [A-Z ]*PRIVATE KEY-----/g,
+  // Someone spelling it out: token=…, api_key: …, Authorization: Bearer …
+  // No leading \b: an underscore is a word character, so `\bpassword` never
+  // matched the DATABASE_PASSWORD= that people actually write.
+  /(?:password|passwd|secret|token|api[_-]?key|access[_-]?key|client[_-]?secret)\s*[:=]\s*\S{6,}/gi,
+  /\bBearer\s+[A-Za-z0-9._-]{16,}/g,
+  // A URL carrying credentials.
+  /\b[a-z][a-z0-9+.-]*:\/\/[^\s/:@]+:[^\s/@]+@/gi,
+];
+
+function redact(text: string): string {
+  let out = text;
+  for (const pattern of SECRETS) out = out.replace(pattern, '[redacted]');
+  return out;
 }
 
 function sha256(text: string): string {

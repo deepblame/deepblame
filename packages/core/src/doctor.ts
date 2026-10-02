@@ -1,6 +1,6 @@
 import { existsSync, statSync } from 'node:fs';
 import { basename, isAbsolute, join } from 'node:path';
-import { QUEUE_FILE, SEAL_LOCK_FILE, STATE_DIR } from '@deepblame/protocol';
+import { LEDGER_REF, QUEUE_FILE, SEAL_LOCK_FILE, STATE_DIR } from '@deepblame/protocol';
 import { commandOnPath, detectHarnesses, type HarnessDetection } from './detect';
 import { tryGit } from './git';
 import { installedCommands, type HookFile } from './hooks';
@@ -79,6 +79,19 @@ export function diagnose(repo: Repo, options: DoctorOptions): DoctorReport {
       status: 'fail',
       detail: 'no ledger in this repository',
       fix: 'deepblame init',
+    });
+  } else if (ledger.createdAt === null) {
+    // The ref is there and it is not a ledger: its first commit has no
+    // meta.json, so somebody has pointed the ref at ordinary history — a
+    // mistyped `git update-ref`, a push of the wrong branch, a tool that
+    // rewrote refs. Nothing will be recorded into it and nothing can be read
+    // out of it, and this used to be reported as "created, nothing recorded
+    // yet", which is the same silence this command exists to break.
+    checks.push({
+      name: 'ledger',
+      status: 'fail',
+      detail: `${LEDGER_REF} points at ${ledger.head.slice(0, 7)}, which is not a ledger: its first commit has no meta.json`,
+      fix: `move it aside (git update-ref -d ${LEDGER_REF}) and run deepblame init`,
     });
   } else {
     checks.push({

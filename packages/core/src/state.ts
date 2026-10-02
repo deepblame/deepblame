@@ -1,6 +1,15 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { CLI_NAME, CONFIG_FILE, IGNORE_FILE, QUEUE_FILE, SCHEMA_VERSION, STATE_DIR } from '@deepblame/protocol';
+import {
+  CLI_NAME,
+  CONFIG_FILE,
+  IGNORE_FILE,
+  QUEUE_FILE,
+  QUEUE_SEALING_FILE,
+  QUEUE_TAKING_FILE,
+  SCHEMA_VERSION,
+  STATE_DIR,
+} from '@deepblame/protocol';
 
 export interface StateDirInfo {
   /** Absolute path of the worktree's state directory. */
@@ -51,11 +60,14 @@ export function ensureStateDir(root: string, now: Date, options: StateDirOptions
 
 export function readStateDir(root: string): StateDirInfo {
   const path = join(root, STATE_DIR);
-  const queuePath = join(path, QUEUE_FILE);
   if (!existsSync(path)) return { path, exists: false, queued: 0 };
-  const queued = existsSync(queuePath)
-    ? readFileSync(queuePath, 'utf8').split('\n').filter((line) => line.trim() !== '').length
-    : 0;
+  // An event waits in one of three places: the queue the hot path appends to,
+  // what the sealer has taken, and what it took but could not seal yet. Count
+  // all three, or a turn stuck in the last of them looks like no turn at all.
+  const queued = [QUEUE_FILE, QUEUE_TAKING_FILE, QUEUE_SEALING_FILE]
+    .map((name) => join(path, name))
+    .filter((file) => existsSync(file))
+    .reduce((total, file) => total + readFileSync(file, 'utf8').split('\n').filter((line) => line.trim() !== '').length, 0);
   return { path, exists: true, queued };
 }
 

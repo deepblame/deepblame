@@ -301,7 +301,12 @@ function undoOne(repo: Repo, scratch: string, written: Written, current: Current
       recordedAs: null,
       status: 'conflicted',
       write: { kind: 'merge', content: merged.content },
-      changed: changedLines(current.text, merged.content),
+      // What is in dispute is the run's own lines, so that is the number to
+      // show. Measuring the merged text instead counted the conflict markers
+      // and both sides of every disagreement: one line of an agent's work was
+      // announced in the plan as seven, on the screen where somebody decides
+      // whether to trust the undo.
+      changed: changedLines(before, left),
     },
     after: current,
   };

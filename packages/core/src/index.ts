@@ -70,7 +70,7 @@ export {
 export { diagnose, type Check, type CheckStatus, type DoctorOptions, type DoctorReport } from './doctor';
 export { collect, type GcOptions, type GcPlan } from './gc';
 export { NoLedgerError, pullLedger, pushLedger, shareError, type ShareResult } from './share';
-export { reportRange, type AgentShare, type FileShare, type ReportResult } from './report';
+export { NoSuchRefError, reportRange, type AgentShare, type FileShare, type ReportResult } from './report';
 export { runFromCommit } from './gitrun';
 export { appendRuns } from './seal';
 export { markWorktree, recordWorktreeTurn, type TurnOptions } from './worktree';

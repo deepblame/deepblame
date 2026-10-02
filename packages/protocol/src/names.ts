@@ -26,6 +26,15 @@ export const LEDGER_IDENTITY = {
  * reads them without loading the rest of the protocol.
  */
 export const QUEUE_FILE = 'queue.ndjson';
+/**
+ * The queue, once the sealer has taken it. Capture only ever appends to
+ * `QUEUE_FILE`; the sealer renames it to `QUEUE_TAKING_FILE` and reads that,
+ * so it never writes to a file the hot path is appending to. What it reads but
+ * cannot seal yet waits in `QUEUE_SEALING_FILE` until the next attempt. Both
+ * belong to the sealer alone, which holds the lock.
+ */
+export const QUEUE_TAKING_FILE = 'queue.taking.ndjson';
+export const QUEUE_SEALING_FILE = 'queue.sealing.ndjson';
 export const CONFIG_FILE = 'config.json';
 export const IGNORE_FILE = '.gitignore';
 export const SEAL_LOCK_FILE = 'seal.lock';

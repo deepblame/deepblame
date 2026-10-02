@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { QUEUE_FILE, STATE_DIR } from '@deepblame/protocol';
+import { QUEUE_FILE, QUEUE_SEALING_FILE, QUEUE_TAKING_FILE, STATE_DIR } from '@deepblame/protocol';
 import { appendEvents, captureClaudeCode, gitBlobOid, openCapture } from '../src/capture';
 import { cost, init, status } from '../src/commands';
 import { hooksInstalled, installClaudeCode, uninstallClaudeCode } from '../src/hooks';
@@ -22,9 +22,19 @@ function feed(root: string, event: Record<string, unknown>, now: Date): { seal: 
   return { seal: result.seal, events: appendEvents(context, result.events) };
 }
 
+/**
+ * Every event still waiting. An unfinished turn starts in the file capture
+ * appends to and, once a seal has looked at it and found no end, waits in the
+ * sealer's own file instead — the sealer takes the queue by renaming it rather
+ * than reading it and writing it back, which is how it stopped overwriting
+ * events that arrived while it worked.
+ */
 function queue(root: string): string[] {
-  const text = readFileSync(join(root, STATE_DIR, QUEUE_FILE), 'utf8');
-  return text.split('\n').filter((line) => line.trim() !== '');
+  return [QUEUE_FILE, QUEUE_TAKING_FILE, QUEUE_SEALING_FILE]
+    .map((name) => join(root, STATE_DIR, name))
+    .filter((file) => existsSync(file))
+    .flatMap((file) => readFileSync(file, 'utf8').split('\n'))
+    .filter((line) => line.trim() !== '');
 }
 
 /** One complete Claude Code turn that edits app.ts. */

@@ -4,6 +4,7 @@ import { parseArgs } from 'node:util';
 import {
   FileNotTrackedError,
   GitError,
+  NoSuchRefError,
   NotARepositoryError,
   blame,
   capturePath,
@@ -182,7 +183,13 @@ export function main(argv: readonly string[], io: Io): number {
   let days: number | undefined;
   if (values.days !== undefined) {
     days = Number(values.days);
-    if (!Number.isInteger(days) || days < 1) return usageError(io, `--days needs a positive number`);
+    // `gc --days 0` is how you say "drop every stored file content", which is
+    // what somebody wants the moment they find something in there that should
+    // never have been. Everywhere else a zero-day window means nothing.
+    const least = command === 'gc' ? 0 : 1;
+    if (!Number.isInteger(days) || days < least) {
+      return usageError(io, `--days needs a ${least === 0 ? 'number of days, 0 or more' : 'positive number'}`);
+    }
   }
   let hours: number | undefined;
   if (values.hours !== undefined) {
@@ -487,6 +494,8 @@ function failure(io: Io, error: unknown): number {
     io.stderr(`${CLI_NAME}: ${error.message}\nGive a path inside this repository.\n`);
   } else if (error instanceof NotARepositoryError) {
     io.stderr(`${CLI_NAME}: not inside a git repository.\nRun it from your project folder, or run 'git init' first.\n`);
+  } else if (error instanceof NoSuchRefError) {
+    io.stderr(`${CLI_NAME}: ${error.message}\nCheck the ref, or fetch it first.\n`);
   } else if (error instanceof GitError && error.status === null) {
     io.stderr(`${CLI_NAME}: git was not found on your PATH. Install git and try again.\n`);
   } else if (error instanceof GitError) {
